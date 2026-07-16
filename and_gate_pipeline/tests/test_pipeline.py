@@ -281,6 +281,55 @@ def test_Lx6_keeps_the_triggers_independent():
     assert dg > -12.0, f"x:k2 duplex too strong ({dg:.1f}) -- triggers will sequester"
 
 
+# ---- kinetic model --------------------------------------------------------- #
+def test_displacement_rate_saturates_and_is_monotonic():
+    """k_eff must rise with toehold strength and saturate at k_on -- the
+    Zhang & Winfree shape. A weak toehold must be orders of magnitude slower."""
+    from and_gate_pipeline.kinetics import KineticParams, displacement_rate
+    kp = KineticParams()
+    rates = [displacement_rate(dg, kp) for dg in (-2, -5, -8, -11, -14, -20)]
+    assert all(b >= a for a, b in zip(rates, rates[1:])), "k_eff not monotonic"
+    assert rates[-1] <= kp.k_on * 1.001                  # saturates at k_on
+    assert rates[-1] / max(rates[0], 1e-30) > 1e3        # weak toehold is far slower
+
+
+def test_fire_probability_competes_with_degradation():
+    """P_fire must depend on the mRNA lifetime -- that competition IS the model.
+    A shorter-lived transcript must be harder to fire."""
+    from and_gate_pipeline.kinetics import KineticParams, fire_probability
+    dg = -9.0
+    short = fire_probability(dg, KineticParams(mrna_half_life_s=30))
+    long = fire_probability(dg, KineticParams(mrna_half_life_s=3000))
+    assert short < long
+    assert 0.0 <= short <= 1.0 and 0.0 <= long <= 1.0
+
+
+def test_and_behaviour_trigger_B_speeds_trigger_A():
+    """The whole thesis: Trigger B must make Trigger A's binding faster, so the
+    switch fires within the transcript's life only when B is present."""
+    from and_gate_pipeline.vista_switch import build
+    from and_gate_pipeline.kinetics import and_behaviour
+    sw = build(_one_pair(), CFG)
+    r = and_behaviour(sw, CFG)
+    assert r["dG_toehold_afterB"] < r["dG_toehold_off"]   # B strengthens the toehold
+    assert r["t_fire_afterB_s"] < r["t_fire_off_s"]       # ...so it fires sooner
+    assert r["p_fire_afterB"] > r["p_fire_off"]
+    assert r["and_ratio"] > 1.0
+
+
+def test_kinetics_not_equilibrium():
+    """Regression on the reasoning, not just the code: an equilibrium read of
+    this design says it leaks (~32%) because equilibrium grants infinite time.
+    The kinetic model must disagree -- the transcript decays first."""
+    from and_gate_pipeline.vista_switch import build
+    from and_gate_pipeline.kinetics import and_behaviour
+    sw = build(_one_pair(), CFG)
+    r = and_behaviour(sw, CFG)
+    assert r["p_fire_off"] < 0.20, (
+        "OFF leak %.3f -- kinetic model should hold where equilibrium leaks"
+        % r["p_fire_off"])
+
+
 # ---- cross-trigger crosstalk utilities ------------------------------------- #
 def test_crosstalk_utilities():
     assert su.max_identity_match("ACGUACGU", "UUACGUUU") == 5   # "ACGU"+ -> ACGUU

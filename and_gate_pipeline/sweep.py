@@ -24,9 +24,10 @@ from __future__ import annotations
 import math
 
 from .config import PipelineConfig
+from .kinetics import KineticParams, and_behaviour
 from .target_scan import scan_both_orientations
 from .thermo import get_backend
-from .truth_table import occupancy, _RT
+from .truth_table import _RT
 from .vista_switch import build
 
 
@@ -38,37 +39,46 @@ def free_fraction(dG: float, C: float) -> float:
     return (C - x) / C
 
 
-def evaluate(cfg: PipelineConfig, g1: str, g2: str, conc: float = 10e-9):
-    """Return metrics for the best exact pair under this config, or None."""
+def evaluate(cfg: PipelineConfig, g1: str, g2: str, conc: float = 10e-9,
+             kp: KineticParams | None = None):
+    """Metrics for the best exact pair under this config, or None.
+
+    Scored kinetically (see kinetics.py): P_fire is the fraction of transcripts
+    that fire before being degraded.  Equilibrium occupancy is NOT used -- it
+    cannot express Kim's AND, which lives in the displacement rate.
+    """
     b = get_backend(cfg)
+    kp = kp or KineticParams(trigger_conc_M=conc)
     pairs = [p for p in scan_both_orientations(g1, g2, cfg) if p.exact]
     if not pairs:
         return None
     p = pairs[0]
     sw = build(p, cfg)
     ta = p.triggerA
-    dg_off = b.binding_dG(ta.a, sw.seq_of("a_star_gap"))
-    dg_on = b.binding_dG(ta.x + ta.a, sw.seq_of("xstar") + sw.seq_of("a_star_gap"))
-    o_off, o_on = occupancy(dg_off, conc), occupancy(dg_on, conc)
+    k = and_behaviour(sw, cfg, kp)
     dg_ab = b.binding_dG(ta.x, p.triggerB.k2)
     s = sw.spans
     stem = b.mfe(sw.core[s["k2star"][0]:s["xstar"][1]])[1]
     return {
-        "n_exact": len(pairs), "off": o_off, "on": o_on,
-        "ratio": o_on / max(o_off, 1e-30), "dg_ab": dg_ab,
+        "n_exact": len(pairs), "off": k["p_fire_off"], "on": k["p_fire_afterB"],
+        "ratio": k["and_ratio"], "dg_ab": dg_ab,
         "free": free_fraction(dg_ab, conc), "stem_mfe": stem,
+        "t_off": k["t_fire_off_s"], "t_on": k["t_fire_afterB_s"],
         "toehold_off": cfg.len_a, "toehold_onB": cfg.len_a + cfg.Lx,
     }
 
 
 def sweep(g1: str, g2: str, conc: float = 10e-9):
-    print("AND/ON trade-off.  occupancy = chance Trigger A can grab on, at %g nM."
-          % (conc * 1e9))
-    print("ON state ~ occ(after B).  AND ratio = occ(after B)/occ(OFF).")
-    print("free = fraction of each mRNA left unpaired by the A:B duplex.\n")
+    kp = KineticParams(trigger_conc_M=conc)
+    print("AND/ON trade-off, scored kinetically (kinetics.py).")
+    print("P_fire = fraction of transcripts that fire before decay "
+          "(t1/2=%.0fs, [trigger]=%g nM)." % (kp.mrna_half_life_s, conc * 1e9))
+    print("free = fraction of each mRNA left unpaired by the A:B duplex.")
+    print("eff ON = free x P_fire(+B) -- a dimerised trigger cannot act.\n")
 
     hdr = ("%-4s %-4s %-6s %9s %9s %8s %8s %7s %8s"
-           % ("Lx", "|a|", "exact", "occ OFF", "occ +B", "AND x", "dG(A:B)", "free", "eff ON"))
+           % ("Lx", "|a|", "exact", "leak OFF", "P_fire +B", "AND x", "dG(A:B)",
+              "free", "eff ON"))
     for title, grid in (("sweep Lx  (|a| = 4)", [(lx, 4) for lx in (4, 6, 8, 10, 12)]),
                         ("sweep |a| (Lx = 6)", [(6, a) for a in (2, 3, 4, 5, 6)])):
         print(title); print(hdr); print("-" * len(hdr))
