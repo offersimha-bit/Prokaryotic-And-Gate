@@ -33,6 +33,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from . import sequence_utils as su
+from .architecture import _weaken_arm          # detunes only the switch's r1 copy
 from .config import PipelineConfig
 from .target_scan import TriggerPair
 
@@ -111,8 +112,12 @@ def build(pair: TriggerPair, cfg: PipelineConfig, reporter: str = "") -> VistaAn
 
     # --- the inhibitory hairpin (our only addition) --------------------- #
     r2star = rc(tb.r2)                 # single-stranded 5' toehold for Trigger B
-    k2star = rc(tb.k2)                 # 6 nt; pairs x* -> Trigger B invades here
-    r1_sw = ta.r1                      # the switch's OWN copy of r1; pairs r1*
+    k2star = rc(tb.k2)                 # Lx nt; pairs x* -> Trigger B invades here
+    # The switch's OWN copy of r1 (pairs r1*).  This is the only part of the
+    # inhibitory hairpin we are free to detune: r1* is Trigger A's binding site
+    # and must stay an exact reverse complement of the real trigger.
+    r1_sw, broken = _weaken_arm(ta.r1, cfg.secondary_bulge_len,
+                                cfg.secondary_arm_gc_bias)
     loop = _fit(_SECONDARY_LOOP_SCAFFOLD, cfg.secondary_loop_len)
     secondary = r2star + k2star + r1_sw + loop
 

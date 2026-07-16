@@ -173,6 +173,46 @@ class ViennaRNABackend(ThermoBackend):
         _struct, e = fc.pf()
         return float(e)
 
+    def opening_energy(self, seq: str, indices) -> float:
+        """Cost of forcing ``indices`` (0-based) single-stranded, in kcal/mol.
+
+        ``G(region held open) - G(unconstrained)`` >= 0.  This is the standard
+        accessibility term (RNAup / IntaRNA): a trigger must pay it before it
+        can pair, so the binding energy a trigger actually sees is
+
+            dG_effective = dG_duplex + opening_energy(binding site)
+
+        which is what makes a masked toehold unusable even though the duplex
+        itself would be favourable.
+        """
+        rna = su.to_rna(seq)
+        fc0 = self._RNA.fold_compound(rna, self._md())
+        _s0, g0 = fc0.pf()
+        fc1 = self._RNA.fold_compound(rna, self._md())
+        for i in indices:
+            if 0 <= i < len(rna):
+                fc1.hc_add_up(i + 1)
+        _s1, g1 = fc1.pf()
+        return float(g1) - float(g0)
+
+    def opening_energy_conditioned(self, seq: str, indices, given) -> float:
+        """Opening cost of ``indices`` *given* ``given`` is already held open.
+
+        ``G(indices + given open) - G(given open)`` -- i.e. what Trigger A still
+        has to pay for its binding site once Trigger B is bound.
+        """
+        rna = su.to_rna(seq)
+        n = len(rna)
+
+        def _pf(force):
+            fc = self._RNA.fold_compound(rna, self._md())
+            for i in force:
+                if 0 <= i < n:
+                    fc.hc_add_up(i + 1)
+            return float(fc.pf()[1])
+
+        return _pf(set(indices) | set(given)) - _pf(set(given))
+
     def _bpp_and_unpaired(self, seq: str):
         rna = su.to_rna(seq)
         n = len(rna)
@@ -291,17 +331,25 @@ class NupackBackend(ThermoBackend):
         # the diagonal entry mat[i][i] is P(base i unpaired).
         return [float(mat[i][i]) for i in range(n)]
 
-    def unpaired_probabilities_constrained(self, seq: str,
-                                           forced_unpaired) -> list[float]:
-        # NUPACK's analysis API has no hard-constraint hook for forcing bases
-        # single-stranded; ViennaRNA (always installed) does. Unconstrained
-        # accessibility agrees between the two engines to <0.01, so borrowing
-        # ViennaRNA for this one quantity keeps the AND-mechanism scoring intact
-        # without distorting results.
+    def _vienna(self):
+        # NUPACK's analysis API has no hard-constraint hook, so the two
+        # constraint-based quantities below are delegated to ViennaRNA (always
+        # installed).  Unconstrained accessibility agrees between the engines to
+        # <0.01, so this does not distort results.
         if self._vienna_helper is None:
             self._vienna_helper = ViennaRNABackend(temperature_c=self._temp)
-        return self._vienna_helper.unpaired_probabilities_constrained(
+        return self._vienna_helper
+
+    def unpaired_probabilities_constrained(self, seq: str,
+                                           forced_unpaired) -> list[float]:
+        return self._vienna().unpaired_probabilities_constrained(
             seq, forced_unpaired)
+
+    def opening_energy(self, seq: str, indices) -> float:
+        return self._vienna().opening_energy(seq, indices)
+
+    def opening_energy_conditioned(self, seq: str, indices, given) -> float:
+        return self._vienna().opening_energy_conditioned(seq, indices, given)
 
     def pair_probabilities(self, seq: str, threshold: float = 0.01):
         rna, mat = self._pair_matrix(seq)

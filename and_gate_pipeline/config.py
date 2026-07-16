@@ -98,9 +98,20 @@ class PipelineConfig:
     linker_suffix: str = "AACCUGGCGGCAGCGCAAAAG"
     d_domain: str = "AAC"
 
-    # Strength balance between the two upper arms of the secondary stem.
-    # +1 favours a stronger r1*/(r1) clamp, -1 favours a weaker one. TUNABLE.
+    # --- detuning the inhibitory hairpin (spec tunable 2) ---------------- #
+    # Both act ONLY on the switch's own copy of r1 on the 5' arm; r1* is
+    # Trigger A's binding site and is never touched.
     secondary_arm_gc_bias: float = 0.0
+    """Fraction of the r1:r1* clamp deliberately mismatched.  0 = perfect clamp
+    (strongest OFF lock); 1 = every clamp position broken (weakest).  The open
+    question this knob exists to answer: Trigger B can only displace the Lx-nt
+    k2*:x* helix, so the toehold it frees is capped at |a|+Lx -- unless a
+    detuned r1:r1* helix melts further once B has invaded.  Raising this trades
+    OFF lock for extra unmasking; sweep it, don't guess."""
+
+    secondary_bulge_len: int = 0
+    """Length of a deliberate non-pairing bulge placed immediately 3' of k2* on
+    the 5' arm (0 = none).  Section 3 of the spec asked for 3."""
 
     # ------------------------------------------------------------------ #
     # Stage 4/5 -- relative-stability requirements                       #
