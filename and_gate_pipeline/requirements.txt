@@ -1,10 +1,21 @@
-# Core (required)
-ViennaRNA>=2.5      # `import RNA` — folding, partition function, base-pair probs
-numpy
-pandas
-matplotlib
-networkx
+# Pinned to the versions this pipeline was developed and verified against
+# (WSL Ubuntu, Python 3.12). Install with:
+#   python -m pip install -r and_gate_pipeline/requirements.txt
 
-# Optional
-# nupack>=4.0       # preferred engine; NOT pip-installable — see README
-# pytest            # to run the test suite via `python -m pytest`
+ViennaRNA==2.7.2      # `import RNA` — folding, partition function, base-pair probs
+numpy==2.5.1
+pandas==3.0.3
+matplotlib==3.11.0
+networkx==3.6.1       # arc plots (the upstream networkx clone is NOT used at runtime)
+
+# ---------------------------------------------------------------------------
+# NUPACK 4 — OPTIONAL but preferred (matches the Toehold-VISTA reference model).
+# NOT installable from PyPI: it requires a free licensed download.
+#   1. register + download nupack-4.x from https://docs.nupack.org/start/
+#   2. python -m pip install -U nupack -f /path/to/nupack-4.x/package
+# Verified working version: nupack==4.1.0.1
+# Without it the pipeline falls back to ViennaRNA automatically (see README).
+# ---------------------------------------------------------------------------
+
+# Dev / testing (optional — the suite also runs standalone without pytest)
+# pytest

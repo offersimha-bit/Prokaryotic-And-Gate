@@ -1,0 +1,3 @@
+[submodule "vista"]
+	path = vista
+	url = https://github.com/AlexGreenLab/vista.git

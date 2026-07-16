@@ -13,13 +13,42 @@ and ranking → off-target scanning → arc-plot visualisation.
 
 ---
 
+## Setting up (for teammates)
+
+This repo uses a **git submodule** (`vista/` — the AlexGreenLab Toehold-VISTA
+reference implementation, pinned to the exact commit this pipeline was built
+against). Submodules are *not* fetched by a plain `git clone`, so use:
+
+```bash
+git clone --recurse-submodules https://github.com/offersimha-bit/Prokaryotic-And-Gate.git
+cd Prokaryotic-And-Gate
+
+# already cloned without --recurse-submodules? run this once:
+git submodule update --init --recursive
+```
+
+Then create an environment and install the pinned dependencies:
+
+```bash
+python -m venv .venv && source .venv/bin/activate      # Linux/WSL
+python -m pip install -r and_gate_pipeline/requirements.txt
+python -m and_gate_pipeline --demo --out results       # verify
+python -m and_gate_pipeline.tests.test_pipeline        # 14/14 should pass
+```
+
+NUPACK is optional and must be installed separately (see below); without it the
+pipeline runs on ViennaRNA automatically. **The pipeline does not need the
+`vista/` submodule at runtime** — the one file it used from there (the E. coli
+codon-usage table) is vendored at `and_gate_pipeline/data/`. The submodule is
+pinned for reproducibility and reference (notebooks, PLS-DA model params).
+
 ## Requirements
 
-| Package | Role | Status |
+| Package | Role | Verified version |
 |---|---|---|
 | **ViennaRNA** (`import RNA`) | folding, partition function, base-pair probabilities | ✅ 2.7.2 |
-| **NUPACK 4** (`import nupack`) | preferred engine (matches the VISTA reference model) | ✅ 4.1.0.1 in the WSL `.venv` — used automatically; verified against ViennaRNA |
-| numpy, pandas, matplotlib, networkx | scoring tables + arc plots | ✅ |
+| **NUPACK 4** (`import nupack`) | preferred engine (matches the VISTA reference model) | ✅ 4.1.0.1 — optional; used automatically when present |
+| numpy, pandas, matplotlib, networkx | scoring tables + arc plots | ✅ pinned in `requirements.txt` |
 
 > **Running under WSL.** NUPACK is installed in the Linux virtual environment
 > `.venv` (Python 3.12), which lives one level **above** this repo (it is not
