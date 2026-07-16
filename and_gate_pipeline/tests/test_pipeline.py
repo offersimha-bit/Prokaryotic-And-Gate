@@ -152,6 +152,63 @@ def test_scoring_runs_and_is_finite():
     assert 0.0 <= sc.triggerB_activation <= 2.0
 
 
+# ---- architecture: features must EXIST, not just be annotated -------------- #
+def test_junction_bulge_actually_forms():
+    """Regression: the spec's 3-nt junction bulge was previously written into
+    the dot-bracket but not into the sequence, so the helix closed through it
+    (P(unpaired) = 0.00). It must now be single-stranded for real."""
+    sw = build_switch(_one_pair(), CFG)
+    r1_start = sw.domains.spans["sec_r1"][0]
+    bulge = list(range(r1_start, r1_start + CFG.bulge_len))
+    up = BK.unpaired_probabilities(sw.core)
+    mean_open = sum(up[i] for i in bulge) / len(bulge)
+    assert mean_open > 0.5, f"junction bulge did not form (P(unpaired)={mean_open:.3f})"
+    # and the annotation must agree with the sequence
+    partner = parse_pairs(sw.off_structure)
+    assert all(partner[i + 1] == 0 for i in bulge)
+
+
+def test_primary_loop_is_the_conserved_element_and_open():
+    """Regression: the RBS loop was home-made filler and self-paired (62% open).
+    It must be Green/VISTA's conserved element and stay single-stranded."""
+    sw = build_switch(_one_pair(), CFG)
+    lo, hi = sw.domains.spans["prim_loop"]
+    loop = sw.core[lo:hi]
+    top = su.to_rna(CFG.hairpin_top)
+    assert loop == top[CFG.primary_stem_len - CFG.len_k1:-3], "loop is not the conserved element"
+    assert su.to_rna(CFG.rbs_seq) in loop
+    assert loop.endswith("AUG")                     # start codon at the loop's 3' end
+    up = BK.unpaired_probabilities(sw.core)
+    mean_open = sum(up[lo:hi]) / (hi - lo)
+    assert mean_open > 0.75, f"RBS loop not open (P(unpaired)={mean_open:.3f})"
+
+
+def test_tunable_secondary_arm_strength_is_wired_up():
+    """Regression: secondary_arm_gc_bias (spec tunable 2) was declared in config
+    and never used. Raising it must measurably weaken the inhibitory stem."""
+    pair = _one_pair()
+
+    def stem_mfe(bias):
+        cfg = PipelineConfig(secondary_arm_gc_bias=bias)
+        sw = build_switch(pair, cfg)
+        a = sw.domains.spans["sec_k2star"][0]
+        z = sw.domains.spans["sec_xstar"][1]
+        return BK.mfe(sw.core[a:z])[1]
+
+    assert stem_mfe(0.5) > stem_mfe(0.0) + 2.0, "tunable 2 has no effect on the clamp"
+
+
+def test_trigger_A_site_is_never_mutated():
+    """The clamp/bulge edits must touch only the switch's internal r1 copy --
+    r1* stays the exact reverse complement of the real trigger (spec section 6)."""
+    pair = _one_pair()
+    for bias in (0.0, 0.5, 1.0):
+        sw = build_switch(pair, PipelineConfig(secondary_arm_gc_bias=bias))
+        assert sw.domain_seq("sec_r1star") == su.reverse_complement(pair.triggerA.r1)
+        assert sw.domain_seq("sec_xstar") == su.reverse_complement(pair.triggerA.x)
+        assert sw.domain_seq("sec_k2star") == su.reverse_complement(pair.triggerB.k2)
+
+
 # ---- cross-trigger crosstalk utilities ------------------------------------- #
 def test_crosstalk_utilities():
     assert su.max_identity_match("ACGUACGU", "UUACGUUU") == 5   # "ACGU"+ -> ACGUU

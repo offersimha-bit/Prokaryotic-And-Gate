@@ -40,7 +40,58 @@ from .target_scan import TriggerPair
 _SECONDARY_LOOP_SCAFFOLD = "GAAACAGAACGAAUCAGACUUCGGAUCAG"
 # Primary-stem body (fills the ascending arm to 18 nt).  The final 3 nt are
 # fixed to CAU so the paired descending base reads AUG (the start codon).
+# Retained only for ``asc_body_override``; the default primary stem now takes
+# its upper arm from the conserved element (see ``_primary_parts``).
 _ASC_BODY_SEED = "GACUGACUGCUCACGUACCAU"
+
+# Watson-Crick + G:U wobble partners -- a base X pairs with P if X in _PAIRS[P].
+_PAIRS = {"A": {"U"}, "U": {"A", "G"}, "G": {"C", "U"}, "C": {"G"}}
+
+
+def _non_pairing_base(partner: str) -> str:
+    """A base that cannot pair with ``partner`` (Watson-Crick or G:U wobble).
+
+    Used to *build* a bulge into the sequence.  A bulge is a property of the
+    sequence, not of the annotation: if the two arms are exact reverse
+    complements the helix simply closes through the intended gap.
+    """
+    for b in "AGCU":
+        if b not in _PAIRS.get(partner, set()) and partner not in _PAIRS.get(b, set()):
+            return b
+    return "A"                                          # pragma: no cover
+
+
+def _weaken_arm(r1: str, bulge_len: int, gc_bias: float) -> tuple[str, list[int]]:
+    """Return the switch's internal copy of r1 with mismatches introduced, plus
+    the 0-based offsets (within r1) that were made non-pairing.
+
+    Two effects, both acting **only on the switch's own r1 copy** on the 5' arm.
+    ``r1*`` on the 3' arm is Trigger A's binding site and is never touched, so
+    Trigger A keeps binding it with perfect complementarity (spec section 6).
+
+    * ``bulge_len``: the first ``bulge_len`` nt after k2* are made non-pairing
+      -> the section-3 junction bulge actually forms.
+    * ``gc_bias`` (tunable 2, "binding strength of the upper segments of the
+      secondary stem"): fraction of the remaining r1/r1* clamp additionally
+      mismatched.  0.0 = perfect clamp (strongest); 1.0 = every clamp position
+      broken (weakest).  Positions are spread evenly so the clamp weakens
+      smoothly rather than losing one contiguous block.
+    """
+    seq = list(r1)
+    broken: list[int] = []
+    for i in range(min(bulge_len, len(r1))):
+        seq[i] = _non_pairing_base(su.complement(r1[i]))
+        broken.append(i)
+
+    clamp = list(range(bulge_len, len(r1)))
+    n_extra = int(round(max(0.0, min(1.0, gc_bias)) * len(clamp)))
+    if n_extra and clamp:
+        step = len(clamp) / n_extra
+        for k in range(n_extra):
+            i = clamp[min(len(clamp) - 1, int(k * step))]
+            seq[i] = _non_pairing_base(su.complement(r1[i]))
+            broken.append(i)
+    return "".join(seq), sorted(set(broken))
 
 
 @dataclass
@@ -124,31 +175,29 @@ def build_switch(pair: TriggerPair, cfg: PipelineConfig,
     loop = _fit_loop(_SECONDARY_LOOP_SCAFFOLD, cfg.secondary_loop_len)
 
     # ---- secondary (inhibitory) stem ----------------------------------- #
-    # 5' arm : k2*  | r1[:B] (bulge) | r1[B:]
-    # 3' arm : r1*[: -B] | r1*[-B:] (bulge) | x*
-    sec_5arm = k2star + r1
+    # 5' arm : k2*  | r1_sw   (switch's own r1 copy -- mismatched to form the
+    #                          section-3 junction bulge, and to tune the clamp)
+    # 3' arm : r1*  | x*      (r1* is Trigger A's site -- never modified)
+    r1_sw, broken = _weaken_arm(r1, B, cfg.secondary_arm_gc_bias)
+    sec_5arm = k2star + r1_sw
     sec_3arm = r1star + xstar
     secondary = sec_5arm + loop + sec_3arm
 
     # ---- spacer a* between the stems ----------------------------------- #
     # ---- primary (Series-A) hairpin ------------------------------------ #
-    body_len = cfg.primary_stem_len - cfg.len_k1
-    seed = su.to_rna(asc_body_override) if asc_body_override else _ASC_BODY_SEED
-    asc_body = _fit_loop(seed, body_len)
-    # guarantee the descending base spells the AUG start codon
-    asc_body = asc_body[:-3] + su.reverse_complement("AUG")  # ...CAU
-    ascending_paired = k1star + asc_body                      # 18 nt paired core
-    aug_bulge = "GGA"[:B] if B <= 3 else ("GGA" + "A" * (B - 3))
-    descending = su.reverse_complement(ascending_paired)      # 18 nt
-    prim_loop = _primary_loop(cfg)
+    ascending_paired, aug_bulge, prim_loop, d_tail = _primary_parts(
+        cfg, k1star, asc_body_override)
+    asc_body = ascending_paired[len(k1star):]
+    descending = su.reverse_complement(ascending_paired)       # 18 nt
 
-    primary = k1star + aug_bulge + asc_body + prim_loop + descending
+    primary = k1star + aug_bulge + asc_body + prim_loop + descending + d_tail
 
     core = secondary + astar + primary
 
     # ---- intended OFF-state structure over the core -------------------- #
     off = _off_structure(cfg, lr1, Lx, len(loop), len(astar),
-                         len(aug_bulge), len(asc_body), len(prim_loop))
+                         len(aug_bulge), len(asc_body), len(prim_loop),
+                         broken, len(d_tail))
     assert len(off) == len(core), (len(off), len(core))
 
     # ---- domain position map ------------------------------------------- #
@@ -165,6 +214,8 @@ def build_switch(pair: TriggerPair, cfg: PipelineConfig,
     p = dm.add("prim_asc_body", p, len(asc_body))
     p = dm.add("prim_loop", p, len(prim_loop))
     p = dm.add("prim_descending", p, len(descending))
+    if d_tail:
+        p = dm.add("prim_d_domain", p, len(d_tail))
 
     reporter_rna = su.to_rna(reporter) if reporter else ""
     if reporter_rna:
@@ -175,34 +226,62 @@ def build_switch(pair: TriggerPair, cfg: PipelineConfig,
                           full=full, domains=dm, reporter=reporter_rna)
 
 
-def _primary_loop(cfg: PipelineConfig) -> str:
-    """RBS-bearing 5'UTR loop.  No AUG after the RBS (the only AUG downstream of
-    the RBS must be the start codon in the descending stem)."""
-    pre, post = "GGACUU", "UACA"
-    loop = su.to_rna(pre + cfg.rbs_seq + post)
-    return loop
+def _primary_parts(cfg: PipelineConfig, k1star: str,
+                   asc_body_override: str | None = None):
+    """Series-A primary hairpin, taken from the conserved Toehold-VISTA element.
+
+    ``cfg.hairpin_top`` (GUUAUAGUUAUGAACAGAGGAGACAUAACAUGAAC) decomposes exactly
+    as VISTA uses it::
+
+        [:12]   GUUAUAGUUAUG          conserved upper ascending stem
+        [12:-3] AACAGAGGAGACAUAACAUG  the loop -- RBS at +3, start codon at its 3' end
+        [-3:]   AAC                   the d domain
+
+    so ``k1*(6) + hairpin_top[:12]`` gives an 18-bp stem invaded 6 nt by k1 --
+    the Series-A geometry -- while the RBS/AUG/reading frame come from Green's
+    validated element rather than from filler of our own.  Returns
+    (ascending_paired, aug_bulge, loop, d_tail).
+    """
+    top = su.to_rna(cfg.hairpin_top)
+    body_len = cfg.primary_stem_len - cfg.len_k1
+    B = cfg.bulge_len
+
+    if asc_body_override is not None:
+        # optimiser path: caller supplies the upper arm; keep the CAU->AUG tail
+        body = _fit_loop(su.to_rna(asc_body_override), body_len)
+        body = body[:-3] + su.reverse_complement("AUG")
+        loop = su.to_rna(_LEGACY_LOOP_PRE + cfg.rbs_seq + _LEGACY_LOOP_POST)
+        d_tail = ""
+    else:
+        body = top[:body_len]                    # conserved upper stem
+        loop = top[body_len:-3]                  # conserved loop: RBS ... AUG
+        d_tail = top[-3:]                        # == cfg.d_domain
+
+    aug_bulge = ("GGA" + "A" * max(0, B - 3))[:B]   # one-sided bulge after k1*
+    return k1star + body, aug_bulge, loop, d_tail
+
+
+_LEGACY_LOOP_PRE, _LEGACY_LOOP_POST = "GGACUU", "UACA"
 
 
 def _off_structure(cfg, lr1, Lx, loop_len, astar_len,
-                   aug_bulge_len, asc_body_len, prim_loop_len) -> str:
-    B = cfg.bulge_len
-    # secondary stem
-    sec = (
-        "(" * Lx                    # k2*  (pairs x*)
-        + "." * B                   # r1[:B] bulge
-        + "(" * (lr1 - B)           # r1[B:] (pairs r1*)
-        + "." * loop_len            # secondary loop
-        + ")" * (lr1 - B)           # r1*
-        + "." * B                   # r1* bulge
-        + ")" * Lx                  # x*
-    )
-    spacer = "." * astar_len        # a* single-stranded (Trigger A spacer site)
-    # primary stem: k1*(6) [bulge] asc_body(12) loop descending(18)
-    prim = (
-        "(" * cfg.len_k1
-        + "." * aug_bulge_len
-        + "(" * asc_body_len
-        + "." * prim_loop_len
-        + ")" * (cfg.len_k1 + asc_body_len)
-    )
+                   aug_bulge_len, asc_body_len, prim_loop_len,
+                   broken=(), d_tail_len=0) -> str:
+    """Intended OFF-state dot-bracket.
+
+    ``broken`` lists 0-based offsets within r1 that were made non-pairing, so
+    the annotation matches the sequence we actually built (bulge + any clamp
+    weakening from tunable 2) instead of asserting pairs that cannot form.
+    """
+    broken = set(broken)
+    five = "".join("." if i in broken else "(" for i in range(lr1))
+    three = "".join("." if (lr1 - 1 - i) in broken else ")" for i in range(lr1))
+    sec = ("(" * Lx + five + "." * loop_len + three + ")" * Lx)
+    spacer = "." * astar_len
+    prim = ("(" * cfg.len_k1
+            + "." * aug_bulge_len
+            + "(" * asc_body_len
+            + "." * prim_loop_len
+            + ")" * (cfg.len_k1 + asc_body_len)
+            + "." * d_tail_len)
     return sec + spacer + prim

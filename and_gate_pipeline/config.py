@@ -116,7 +116,12 @@ class PipelineConfig:
 
     expression_weighting: bool = True
     """Multiply Trigger-B activation score by relative transcript abundance
-    (encounter probability) when DE data is supplied."""
+    (encounter probability, spec 7A) when DE data is supplied as
+    {gene_name: abundance}.  Neutral (1.0) when no data is given."""
+
+    expression_weight_range: tuple = (0.5, 2.0)
+    """Clamp on the abundance multiplier (abundance / median) so a single
+    highly-expressed transcript cannot dominate the ranking."""
 
     # ------------------------------------------------------------------ #
     # Stage 6 -- sequence-optimisation constraints                       #
@@ -144,6 +149,17 @@ class PipelineConfig:
     max_unintended_match: int = 0
     """Hard filter: reject when the longest unintended cross-match reaches this
     many nt (0 == disabled, score-only)."""
+
+    crosstalk_mask_connector: bool = False
+    """Whether to hide the x/k2 duplex before measuring Trigger-A/Trigger-B
+    crosstalk.
+
+    In the *split-trigger* design (the standalone scanner) the two halves are
+    MEANT to hybridise through that connector, so it is masked out.  In THIS
+    two-hairpin architecture the same duplex is parasitic: x = revcomp(k2) is
+    required only so k2* can pair x* inside the inhibitory stem, and it makes
+    the two triggers complementary to each other as an unwanted side effect.
+    Default False so that liability is measured, not hidden."""
 
     # Off-target scan
     offtarget_window: int | None = None      # defaults to Lx if None

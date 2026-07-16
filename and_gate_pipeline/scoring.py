@@ -118,6 +118,35 @@ class DesignScorer:
         self.essential = essential_genes or set()
         self.expression = expression or {}
 
+    # ------- 7A: encounter probability ----------------------------------- #
+    def _encounter_weight(self, sw: DesignedSwitch) -> float:
+        """Spec 7A: fold Trigger-B transcript abundance into the activation
+        score -- a more abundant trigger is more likely to meet the sensor.
+
+        ``expression`` maps {gene_name: abundance} (any linear unit: TPM, counts,
+        DE baseMean).  The gene name comes from ``pair.meta['gene_b_name']`` when
+        the pooled scanner supplied it, else the literal key 'TriggerB'.  The
+        multiplier is abundance / median(abundance) clamped to
+        ``expression_weight_range`` so one outlier transcript cannot dominate the
+        ranking.  Returns 1.0 (neutral) when no data is supplied.
+        """
+        if not (self.cfg.expression_weighting and self.expression):
+            return 1.0
+        name = sw.pair.meta.get("gene_b_name") if sw.pair.meta else None
+        val = None
+        for key in (name, "TriggerB"):
+            if key is not None and key in self.expression:
+                val = float(self.expression[key])
+                break
+        if val is None:
+            return 1.0
+        vals = sorted(float(v) for v in self.expression.values())
+        med = vals[len(vals) // 2] if vals else 0.0
+        if med <= 0:
+            return 1.0
+        lo, hi = self.cfg.expression_weight_range
+        return max(lo, min(hi, val / med))
+
     # ------- 7A ---------------------------------------------------------- #
     def _score_triggerB(self, sw: DesignedSwitch, tmB: TriggerMetrics,
                         details: dict) -> float:
@@ -133,12 +162,7 @@ class DesignScorer:
         target_access = tmB.accessibility
         bind_norm = _neg_to_01(dg_bind, best=-30.0, worst=0.0)
 
-        encounter = 1.0
-        if self.cfg.expression_weighting and self.expression:
-            g = sw.pair.triggerB.gene
-            # expression keyed by gene name isn't available here; use a supplied
-            # relative-abundance multiplier if present, else neutral.
-            encounter = float(self.expression.get("TriggerB", 1.0))
+        encounter = self._encounter_weight(sw)
 
         details.update({
             "B_target_access": target_access,
@@ -250,13 +274,21 @@ class DesignScorer:
 
         # cross-trigger crosstalk (ported from the standalone scanner) ---- #
         # Do the two triggers stick to (reverse-complement) or mimic
-        # (identity) each other *beyond* the intended x/k2 connector?  The
-        # connector is masked so it is not flagged as a problem.
+        # (identity) each other?  In this architecture the x/k2 duplex is
+        # PARASITIC (it competes with both triggers binding the switch), so by
+        # default it is measured, not masked -- see cfg.crosstalk_mask_connector.
         ta, tb = sw.pair.triggerA, sw.pair.triggerB
-        tA_masked = su.mask_region(ta.seq, len(ta.r1), len(ta.x))
-        tB_masked = su.mask_region(tb.seq, len(tb.r2), len(tb.k2))
-        stick_nt = su.max_revcomp_match(tA_masked, tB_masked)
-        subst_nt = su.max_identity_match(tA_masked, tB_masked)
+        if cfg.crosstalk_mask_connector:
+            tA_cmp = su.mask_region(ta.seq, len(ta.r1), len(ta.x))
+            tB_cmp = su.mask_region(tb.seq, len(tb.r2), len(tb.k2))
+        else:
+            tA_cmp, tB_cmp = su.to_rna(ta.seq), su.to_rna(tb.seq)
+        stick_nt = su.max_revcomp_match(tA_cmp, tB_cmp)
+        subst_nt = su.max_identity_match(tA_cmp, tB_cmp)
+        # explicit A:B dimer stability -- the quantity that decides whether the
+        # triggers sequester each other instead of binding the switch
+        dg_dimer = b.binding_dG(ta.seq, tb.seq)
+        details["triggerAB_dimer_dG"] = dg_dimer
         ref = max(1.0, cfg.unintended_match_nt_ref)
         details["crosstalk_stick_nt"] = stick_nt
         details["crosstalk_subst_nt"] = subst_nt
