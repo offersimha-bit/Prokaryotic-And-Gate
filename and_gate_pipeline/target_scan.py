@@ -24,6 +24,17 @@ from .config import PipelineConfig
 
 @dataclass
 class TriggerA:
+    """Primary trigger, a contiguous window of gene 1.
+
+    5'-> 3' order is ``k1 - a - x - r1``.
+
+    This is forced by the switch: Trigger A's binding site runs
+    ``r1* | x*(=k2) | a* | k1*`` 5'->3' along the transcript, and a contiguous
+    antiparallel duplex requires the trigger to be its reverse complement,
+    i.e. k1 first.  (The original spec text said "in order (5' to 3'): r1, x, a,
+    k1", which is the same domains read 3'->5'; building it literally gave
+    dG(A:switch) = -4.3 instead of -30.8 kcal/mol.)
+    """
     gene: str
     pos_x: int              # 0-based start of x within the gene
     r1: str
@@ -33,11 +44,16 @@ class TriggerA:
 
     @property
     def seq(self) -> str:
-        return self.r1 + self.x + self.a + self.k1
+        return self.k1 + self.a + self.x + self.r1
 
 
 @dataclass
 class TriggerB:
+    """Secondary trigger, a contiguous window of gene 2.  5'->3' = ``k2 - r2``.
+
+    Binds the switch's ``r2* | k2*`` (5'->3'): r2 pairs the single-stranded r2*
+    toehold, then k2 invades the k2*:k2 helix and opens the inhibitory hairpin.
+    """
     gene: str
     pos_k2: int             # 0-based start of k2 within the gene
     r2: str
@@ -45,7 +61,7 @@ class TriggerB:
 
     @property
     def seq(self) -> str:
-        return self.r2 + self.k2
+        return self.k2 + self.r2
 
 
 @dataclass
@@ -65,19 +81,21 @@ class TriggerPair:
 
 
 def _valid_x_positions(gene: str, cfg: PipelineConfig) -> range:
-    """x positions in gene_a with room for r1 upstream and a+k1 downstream."""
+    """x positions in gene_a with room for k1+a UPSTREAM and r1 DOWNSTREAM
+    (Trigger A reads k1-a-x-r1 5'->3')."""
     lr1 = cfg.resolved_len_r1()
-    tail = cfg.Lx + cfg.len_a + cfg.len_k1
-    lo = lr1
-    hi = len(gene) - tail
+    head = cfg.len_k1 + cfg.len_a
+    lo = head
+    hi = len(gene) - cfg.Lx - lr1
     return range(lo, hi + 1) if hi >= lo else range(0)
 
 
 def _valid_k2_positions(gene: str, cfg: PipelineConfig) -> range:
-    """k2 positions in gene_b with room for r2 upstream."""
+    """k2 positions in gene_b with room for r2 DOWNSTREAM
+    (Trigger B reads k2-r2 5'->3')."""
     lr2 = cfg.resolved_len_r2()
-    lo = lr2
-    hi = len(gene) - cfg.Lx
+    lo = 0
+    hi = len(gene) - cfg.Lx - lr2
     return range(lo, hi + 1) if hi >= lo else range(0)
 
 
@@ -105,25 +123,28 @@ def _best_k2_match(rc_x: str, gene_b: str, positions: range):
 
 
 def _build_triggerA(gene: str, i: int, cfg: PipelineConfig) -> TriggerA:
+    """Slice k1 - a - x - r1 (5'->3') around x at position i."""
     lr1 = cfg.resolved_len_r1()
+    k1_start = i - cfg.len_a - cfg.len_k1
+    a_start = i - cfg.len_a
     x_end = i + cfg.Lx
-    a_end = x_end + cfg.len_a
-    k1_end = a_end + cfg.len_k1
     return TriggerA(
         gene=gene, pos_x=i,
-        r1=gene[i - lr1:i],
+        k1=gene[k1_start:a_start],
+        a=gene[a_start:i],
         x=gene[i:x_end],
-        a=gene[x_end:a_end],
-        k1=gene[a_end:k1_end],
+        r1=gene[x_end:x_end + lr1],
     )
 
 
 def _build_triggerB(gene: str, j: int, cfg: PipelineConfig) -> TriggerB:
+    """Slice k2 - r2 (5'->3') with k2 at position j."""
     lr2 = cfg.resolved_len_r2()
+    k2_end = j + cfg.Lx
     return TriggerB(
         gene=gene, pos_k2=j,
-        r2=gene[j - lr2:j],
-        k2=gene[j:j + cfg.Lx],
+        k2=gene[j:k2_end],
+        r2=gene[k2_end:k2_end + lr2],
     )
 
 

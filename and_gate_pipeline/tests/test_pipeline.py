@@ -57,15 +57,19 @@ def test_config_integrity_contradiction():
 
 
 # ---- target scan ----------------------------------------------------------- #
-def _planted_genes(seed=0, perfect=True):
+def _planted_genes(seed=0, perfect=True, cfg=CFG):
+    """Plant an x / revcomp(x) pair with room for the 5'->3' domain order:
+    gene 1 must hold k1-a-x-r1 and gene 2 must hold k2-r2."""
     rng = random.Random(seed)
     r = lambda n: "".join(rng.choice("ACGU") for _ in range(n))
-    x = "ACGUACGUACGU"
-    g1 = r(25) + "GGA" + x + "CAC" + "UUCAGG" + r(25)
-    rc = su.reverse_complement(x)
+    x = ("ACGUACGUACGU" * 2)[:cfg.Lx]
+    head = cfg.len_k1 + cfg.len_a          # k1 + a sit UPSTREAM of x
+    tail = cfg.resolved_len_r1()           # r1 sits DOWNSTREAM of x
+    g1 = r(20) + r(head) + x + r(tail) + r(20)
+    rcx = su.reverse_complement(x)
     if not perfect:
-        rc = rc[:-1] + ("A" if rc[-1] != "A" else "C")   # one mismatch
-    g2 = r(20) + rc + r(20)
+        rcx = rcx[:-1] + ("A" if rcx[-1] != "A" else "C")   # one mismatch
+    g2 = r(20) + rcx + r(cfg.resolved_len_r2()) + r(20)     # k2 then r2
     return g1, g2
 
 
@@ -207,6 +211,74 @@ def test_trigger_A_site_is_never_mutated():
         assert sw.domain_seq("sec_r1star") == su.reverse_complement(pair.triggerA.r1)
         assert sw.domain_seq("sec_xstar") == su.reverse_complement(pair.triggerA.x)
         assert sw.domain_seq("sec_k2star") == su.reverse_complement(pair.triggerB.k2)
+
+
+# ---- VISTA-based AND switch (the corrected architecture) ------------------- #
+def test_trigger_domain_order_matches_the_footprint():
+    """Trigger A must be revcomp of its own binding site r1*|x*|a*|k1*, i.e.
+    k1-a-x-r1 5'->3'. Building it as r1-x-a-k1 (the spec's literal wording)
+    gave dG(A:switch) = -4.3 instead of -30.8."""
+    from and_gate_pipeline.vista_switch import build
+    pair = _one_pair()
+    sw = build(pair, CFG)
+    fp_A = sw.core[sw.spans["r1star"][0]:sw.spans["k1star"][1]]
+    assert su.reverse_complement(fp_A) == pair.triggerA.seq
+    fp_B = sw.core[sw.spans["r2star"][0]:sw.spans["k2star"][1]]
+    assert su.reverse_complement(fp_B) == pair.triggerB.seq
+
+
+def test_primary_module_is_vistas_own_construction():
+    """The primary module must be VISTA's builder output, not a hand-roll:
+    30-nt toehold, 6-nt invasion, and Green's real 11-nt RBS loop."""
+    from and_gate_pipeline.vista_switch import build
+    sw = build(_one_pair(), CFG)
+    top = su.to_rna(CFG.hairpin_top)
+    assert sw.seq_of("top") == top                       # conserved element verbatim
+    assert sw.spans["toehold"][1] - sw.spans["toehold"][0] == 30
+    assert sw.spans["k1star"][1] - sw.spans["k1star"][0] == CFG.len_k1 == 6
+    assert top[12:23] == "AACAGAGGAGA"                    # Green's loop, RBS inside
+
+
+def test_trigger_B_has_an_exposed_toehold():
+    """r2* must be single-stranded in OFF -- without it Trigger B has nothing to
+    nucleate on (dG(B:switch) was -0.54 before r2* existed)."""
+    from and_gate_pipeline.vista_switch import build
+    sw = build(_one_pair(), CFG)
+    s, e = sw.spans["r2star"]
+    up = BK.unpaired_probabilities(sw.core)
+    assert sum(up[s:e]) / (e - s) > 0.4
+    assert BK.binding_dG(sw.triggerB, sw.core) < -15.0
+
+
+def test_inhibitory_hairpin_masks_the_toehold():
+    """OFF: r1*+x* (26 of the 30-nt toehold) hidden; only a* exposed."""
+    from and_gate_pipeline.vista_switch import build
+    sw = build(_one_pair(), CFG)
+    up = BK.unpaired_probabilities(sw.core)
+    ms, me = sw.spans["masked_toehold"]
+    gs, ge = sw.spans["a_star_gap"]
+    masked = sum(up[ms:me]) / (me - ms)
+    gap = sum(up[gs:ge]) / (ge - gs)
+    assert masked < 0.2, f"toehold not masked ({masked:.3f})"
+    assert gap > 0.4, f"Kim's gap a* not exposed ({gap:.3f})"
+
+
+def test_and_is_a_nucleation_effect():
+    """Trigger B must raise Trigger A's nucleation occupancy. This is what Kim
+    measures; an MFE table cannot show it (cofold has no concentration)."""
+    from and_gate_pipeline.vista_switch import build
+    from and_gate_pipeline.truth_table import and_ratio
+    sw = build(_one_pair(), CFG)
+    o_off, o_on, ratio = and_ratio(sw, CFG)
+    assert o_off < o_on
+    assert ratio > 5.0, f"AND ratio only {ratio:.1f}x"
+
+
+def test_Lx6_keeps_the_triggers_independent():
+    """Lx=6 must keep the A:B duplex weak enough that both mRNAs stay free."""
+    pair = _one_pair()
+    dg = BK.binding_dG(pair.triggerA.x, pair.triggerB.k2)
+    assert dg > -12.0, f"x:k2 duplex too strong ({dg:.1f}) -- triggers will sequester"
 
 
 # ---- cross-trigger crosstalk utilities ------------------------------------- #

@@ -17,8 +17,19 @@ class PipelineConfig:
     # ------------------------------------------------------------------ #
     # Stage 1 -- target scanning and trigger geometry                    #
     # ------------------------------------------------------------------ #
-    Lx: int = 12
-    """Length of the complementary core segment (|x| == |k2|)."""
+    Lx: int = 6
+    """Length of the complementary core segment (|x| == |k2|).
+
+    6, not 12.  Lx sets three things at once:
+      * findability  -- 4^6 = 4k (exact matches occur between real genes)
+                        vs 4^12 = 16.7M (essentially never)
+      * trigger independence -- x:k2 is also the A:B duplex.  At Lx=6,
+        dG ~ -6.9 (Kd ~ 15 uM) so ~100% of both mRNAs stay free at cellular
+        concentrations; at Lx=12, dG ~ -19.4 (Kd ~ 0.02 pM) so ~0% stay free
+        and the two transcripts would sequester each other completely.
+      * the k2*:k2 helix that Trigger B invades -- 6 nt, matching Green 2026's
+        6-nt invasion.
+    """
 
     L_A: int = 36
     """Total length of Trigger A (|r1| + |x| + |a| + |k1|)."""

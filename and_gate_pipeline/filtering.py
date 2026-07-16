@@ -80,12 +80,16 @@ def evaluate_trigger(name: str, gene: str, start: int, end: int,
 
 
 def evaluate_pair_triggers(pair, cfg: PipelineConfig, backend: ThermoBackend):
-    """Evaluate both triggers of a :class:`TriggerPair`."""
+    """Evaluate both triggers of a :class:`TriggerPair`.
+
+    Windows follow the 5'->3' domain order: Trigger A is k1-a-x-r1 (so k1+a lie
+    UPSTREAM of x and r1 DOWNSTREAM), Trigger B is k2-r2 (r2 downstream of k2).
+    """
     ta, tb = pair.triggerA, pair.triggerB
-    a_start = ta.pos_x - cfg.resolved_len_r1()
-    a_end = ta.pos_x + cfg.Lx + cfg.len_a + cfg.len_k1
-    b_start = tb.pos_k2 - cfg.resolved_len_r2()
-    b_end = tb.pos_k2 + cfg.Lx
+    a_start = ta.pos_x - cfg.len_k1 - cfg.len_a
+    a_end = ta.pos_x + cfg.Lx + cfg.resolved_len_r1()
+    b_start = tb.pos_k2
+    b_end = tb.pos_k2 + cfg.Lx + cfg.resolved_len_r2()
     tmA = evaluate_trigger("TriggerA", ta.gene, a_start, a_end, cfg, backend)
     tmB = evaluate_trigger("TriggerB", tb.gene, b_start, b_end, cfg, backend)
     return tmA, tmB
