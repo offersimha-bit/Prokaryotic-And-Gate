@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments (the WSL .venv lives one level up, outside this repo)
+.venv/
+venv/
+env/
+
+# Regenerable pipeline output (arc plots, ranked CSVs, design dumps)
+and_gate_pipeline/demo_out/
+and_gate_results/
+results/
+*_arcs.png
+pair_fraction.csv
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

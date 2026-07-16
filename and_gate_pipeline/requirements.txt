@@ -1,0 +1,10 @@
+# Core (required)
+ViennaRNA>=2.5      # `import RNA` — folding, partition function, base-pair probs
+numpy
+pandas
+matplotlib
+networkx
+
+# Optional
+# nupack>=4.0       # preferred engine; NOT pip-installable — see README
+# pytest            # to run the test suite via `python -m pytest`
