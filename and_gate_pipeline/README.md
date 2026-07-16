@@ -106,6 +106,51 @@ Outputs in `results/`:
 * `viz/*_arcs.png`, `viz/*_pair_fraction.csv` — arc diagrams of the target genes
   and the top switches (VISTA `pair_fraction.csv` layout)
 
+## Pooled multi-gene discovery (`interop.py`)
+
+The standalone scanner at `Triger finding/and_gate_trigger.py` does something
+this pipeline doesn't: it pools **many** gene records and hunts for the
+coincidence where one gene's connector `x` is the exact reverse complement of
+another gene's `k2`. This pipeline takes only two genes but builds the real
+switch. `interop.py` chains them — **pooled discovery → full design** — without
+editing the scanner:
+
+```python
+from and_gate_pipeline.interop import load_scanner, load_genes, run_from_scanner, config_from_params
+
+mod   = load_scanner()                       # imported unmodified; its main() never runs
+cfg   = config_from_params(mod.Params())     # Lx=6, r1=11, a=4, k1=15, r2=30
+genes = load_genes(["genes/amr.fasta"])      # any number of FASTA files, pooled
+out   = run_from_scanner(genes, cfg=cfg, out_dir="results")
+
+best = out.results[0]
+print(best.score.quality_percent, best.switch.core)
+print(best.pair.meta["gene_a_name"], best.pair.meta["gene_b_name"])
+```
+
+> **Why this is safe to run on NUPACK.** The scanner's own `select_backend()`
+> tries NUPACK first, and its NUPACK `unpaired_probs()` assumes an
+> `(n+1)×(n+1)` pair matrix with an unpaired column — but NUPACK 4.1 returns
+> `n×n` with P(unpaired) on the **diagonal**. The lookup raises `IndexError`,
+> which the scanner swallows (`except Exception: return [0.5]*n`), silently
+> reporting **every base as 50 % unpaired** — which also scrambles its
+> accessibility-ordered top-k pre-selection. `interop` never calls
+> `select_backend()`: it injects `_ScannerBackendShim`, wrapping this pipeline's
+> verified engine, into the scanner's `scan_trigger1`/`scan_trigger2` (which
+> take `backend` as an argument). Covered by
+> `test_interop_shim_is_not_the_broken_backend`.
+>
+> ⚠️ Running `python and_gate_trigger.py` **standalone** still hits the bug.
+> Until it's fixed upstream, set `backend: str = "vienna"` in its `Params`.
+
+Ported from that scanner into this pipeline's scoring (Section 7D):
+**cross-trigger crosstalk** (`crosstalk_stick_nt` / `crosstalk_subst_nt` — do the
+two triggers hybridise to or mimic each other beyond the intended connector,
+with the connector masked out), **Type IIS sites** (BsaI/BsmBI/SapI/BbsI —
+Golden Gate hazards), and an **absolute 0–100 `quality_percent`** with a
+per-criterion `breakdown()`, measured against fixed reference scales so it stays
+comparable across runs.
+
 ## Library use
 
 ```python

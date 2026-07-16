@@ -152,6 +152,91 @@ def test_scoring_runs_and_is_finite():
     assert 0.0 <= sc.triggerB_activation <= 2.0
 
 
+# ---- cross-trigger crosstalk utilities ------------------------------------- #
+def test_crosstalk_utilities():
+    assert su.max_identity_match("ACGUACGU", "UUACGUUU") == 5   # "ACGU"+ -> ACGUU
+    # b's reverse complement appears in a -> sticking
+    assert su.max_revcomp_match("AAGGCCUU", su.reverse_complement("AAGGCCUU")) == 8
+    masked = su.mask_region("AAAACCCCGGGG", 4, 4)
+    assert masked == "AAAANNNNGGGG"
+    # masked region must not contribute to a match
+    assert su.longest_common_substring("NNNN", "CCCC") == 0
+
+
+def test_scorecard_quality_and_crosstalk_present():
+    p = _one_pair()
+    sw = build_switch(p, CFG)
+    tmA, tmB = evaluate_pair_triggers(p, CFG, BK)
+    sc = DesignScorer(CFG, BK).score(sw, tmA, tmB)
+    assert 0.0 <= sc.quality_percent <= 100.0
+    for k in ("crosstalk_stick_nt", "crosstalk_subst_nt", "type2s_sites"):
+        assert k in sc.details
+    rows = sc.breakdown(CFG.weights)
+    assert len(rows) == 3
+    assert abs(sum(mx for *_x, mx in rows) - 100.0) < 1e-6   # max points sum to 100
+
+
+# ---- interop with the standalone scanner ----------------------------------- #
+def _scanner_available():
+    try:
+        from and_gate_pipeline.interop import load_scanner
+        load_scanner()
+        return True
+    except Exception:
+        return False
+
+
+def test_interop_shim_is_not_the_broken_backend():
+    """The scanner's own NUPACK unpaired_probs() silently returns 0.5 for every
+    base; the pipeline must never inherit that when it drives the scanner."""
+    if not _scanner_available():
+        return
+    from and_gate_pipeline.interop import _ScannerBackendShim
+    shim = _ScannerBackendShim(BK, CFG.temperature_c)
+    up = shim.unpaired_probs("GGGAAACUUCGGAUCCGAAGUUUCCC")
+    assert not all(x == 0.5 for x in up), "shim fell back to the 0.5 stub"
+    assert any(x > 0.0 for x in up)
+    struct, e_mfe, e_ens = shim.fold("GGGAAACUUCGGAUCCGAAGUUUCCC")
+    assert e_ens <= e_mfe + 1e-6            # ensemble energy is never above MFE
+    assert 0.0 <= shim.structure_probability("GGGAAACUUCGGAUCCGAAGUUUCCC", 37.0) <= 1.0
+
+
+def test_interop_config_roundtrip_satisfies_equations():
+    if not _scanner_available():
+        return
+    from and_gate_pipeline.interop import load_scanner, config_from_params
+    mod = load_scanner()
+    cfg = config_from_params(mod.Params())
+    rep = validate_config(cfg)
+    assert rep.ok, rep.errors
+    p = mod.Params()
+    assert cfg.Lx == p.star_len and cfg.len_k1 == p.K1_len
+    assert cfg.resolved_len_r1() == p.R1_len
+    assert cfg.resolved_len_r2() == p.R2_len
+
+
+def test_interop_window_conversion_maps_domains():
+    if not _scanner_available():
+        return
+    from and_gate_pipeline.interop import load_scanner, windows_to_pair
+    mod = load_scanner()
+    gene_a = "AAAACCCCGGGGUUUUACGUACGUACGUACGUACGUACGUAAAA"
+    gene_b = "UUUUGGGGCCCCAAAAUGCAUGCAUGCAUGCAUGCAUGCAUUUU"
+    w1 = mod.Trigger1Window(gene="A", start=2, seq="", r1="AACCCC",
+                            star="GGGGUU", a="UUAC", k1="GUACGU",
+                            mean_unpaired=0.5)
+    w2 = mod.Trigger2Window(gene="B", start=1, seq="", r2="UUUGGG",
+                            k2=su.reverse_complement("GGGGUU"),
+                            mean_unpaired=0.5)
+    pair = windows_to_pair(w1, w2, {"A": gene_a, "B": gene_b})
+    assert pair.triggerA.x == "GGGGUU"          # star -> x
+    assert pair.triggerA.pos_x == 2 + len("AACCCC")
+    assert pair.triggerB.pos_k2 == 1 + len("UUUGGG")
+    assert pair.hamming == 0 and pair.exact
+    assert pair.triggerA.gene == su.to_rna(gene_a)   # sequence, not the name
+    assert pair.meta["gene_a_name"] == "A"
+
+
 def _run_standalone() -> int:
     """Minimal runner so the suite works without pytest installed."""
     fns = [v for k, v in sorted(globals().items())

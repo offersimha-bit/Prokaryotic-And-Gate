@@ -127,3 +127,43 @@ def gc_fraction(seq: str) -> float:
     if not s:
         return 0.0
     return (s.count("G") + s.count("C")) / len(s)
+
+
+# --------------------------------------------------------------------------- #
+# Cross-trigger comparison (ported from the standalone trigger scanner)        #
+# --------------------------------------------------------------------------- #
+def mask_region(seq: str, start: int, length: int) -> str:
+    """Blank out a region with 'N' so an *intended* duplex (the x/k2 connector)
+    is not counted as unintended cross-talk."""
+    s = to_rna(seq)
+    return s[:start] + "N" * length + s[start + length:]
+
+
+def longest_common_substring(a: str, b: str) -> int:
+    """Length of the longest shared contiguous stretch, ignoring 'N'."""
+    a, b = to_rna(a), to_rna(b)
+    if not a or not b:
+        return 0
+    prev = [0] * (len(b) + 1)
+    best = 0
+    for i in range(1, len(a) + 1):
+        cur = [0] * (len(b) + 1)
+        ai = a[i - 1]
+        for j in range(1, len(b) + 1):
+            if ai != "N" and ai == b[j - 1]:
+                cur[j] = prev[j - 1] + 1
+                best = max(best, cur[j])
+        prev = cur
+    return best
+
+
+def max_identity_match(a: str, b: str) -> int:
+    """Longest identical stretch shared by a and b ("substitution" risk: the two
+    triggers look alike enough to confuse the switch)."""
+    return longest_common_substring(a, b)
+
+
+def max_revcomp_match(a: str, b: str) -> int:
+    """Longest stretch where a is reverse-complementary to b ("sticking" risk:
+    the two triggers hybridise to each other and sequester one another)."""
+    return longest_common_substring(a, reverse_complement(b))

@@ -65,12 +65,35 @@ class ScoreCard:
     triggerA_on_state: float = 0.0
     penalty: float = 0.0
     total: float = 0.0
+    quality_percent: float = 0.0
+    """Absolute 0-100 quality of the three positive criteria, measured against
+    FIXED reference scales -- never min-maxed against the other candidates in
+    this run.  A 70 today means the same as a 70 after changing the gene set or
+    top-N, so it is comparable across runs.  ``total`` is this quality (as a
+    0-1 weighted sum) minus penalties, and is what ranking uses."""
+
     details: dict = field(default_factory=dict)
     flags: list[str] = field(default_factory=list)
+
+    def breakdown(self, weights: dict) -> list[tuple]:
+        """Per-criterion (label, quality, weight, points, max_points) on the
+        0-100 scale -- mirrors the standalone scanner's score breakdown."""
+        pos = [
+            ("(A) Trigger-B activation", self.triggerB_activation,
+             weights["triggerB_activation"]),
+            ("(B) intermediate: A site opens", self.intermediate_state,
+             weights["intermediate_state"]),
+            ("(C) Trigger-A / ON state", self.triggerA_on_state,
+             weights["triggerA_on_state"]),
+        ]
+        wsum = sum(w for _l, _q, w in pos) or 1.0
+        return [(label, q, w, 100.0 * w * q / wsum, 100.0 * w / wsum)
+                for label, q, w in pos]
 
     def as_row(self) -> dict:
         row = {
             "score_total": round(self.total, 4),
+            "quality_percent": round(self.quality_percent, 2),
             "score_triggerB": round(self.triggerB_activation, 4),
             "score_intermediate": round(self.intermediate_state, 4),
             "score_triggerA_on": round(self.triggerA_on_state, 4),
@@ -225,6 +248,26 @@ class DesignScorer:
             penalty += 0.10
             flags.append("weak_spacer_a")
 
+        # cross-trigger crosstalk (ported from the standalone scanner) ---- #
+        # Do the two triggers stick to (reverse-complement) or mimic
+        # (identity) each other *beyond* the intended x/k2 connector?  The
+        # connector is masked so it is not flagged as a problem.
+        ta, tb = sw.pair.triggerA, sw.pair.triggerB
+        tA_masked = su.mask_region(ta.seq, len(ta.r1), len(ta.x))
+        tB_masked = su.mask_region(tb.seq, len(tb.r2), len(tb.k2))
+        stick_nt = su.max_revcomp_match(tA_masked, tB_masked)
+        subst_nt = su.max_identity_match(tA_masked, tB_masked)
+        ref = max(1.0, cfg.unintended_match_nt_ref)
+        details["crosstalk_stick_nt"] = stick_nt
+        details["crosstalk_subst_nt"] = subst_nt
+        details["crosstalk_stick_quality"] = max(0.0, 1.0 - stick_nt / ref)
+        details["crosstalk_subst_quality"] = max(0.0, 1.0 - subst_nt / ref)
+        penalty += 0.20 * min(1.0, stick_nt / ref)
+        penalty += 0.10 * min(1.0, subst_nt / ref)
+        if cfg.max_unintended_match and max(stick_nt, subst_nt) >= cfg.max_unintended_match:
+            penalty += 0.4
+            flags.append(f"crosstalk({max(stick_nt, subst_nt)}nt)")
+
         # restricted sequences ------------------------------------------ #
         rep = check_restricted(sw, cfg)
         details["forbidden_runs"] = len(rep.forbidden_runs)
@@ -232,6 +275,13 @@ class DesignScorer:
         if rep.forbidden_runs:
             penalty += 0.05 * len(rep.forbidden_runs)
             flags.append("forbidden_run")
+
+        # Type IIS restriction sites (Golden Gate / MoClo hazard) -------- #
+        motifs = su.has_forbidden_run(sw.full, cfg.forbidden_motifs)
+        details["type2s_sites"] = len(motifs)
+        if motifs:
+            penalty += 0.10 * len(motifs)
+            flags.append(f"type2s({','.join(motifs)})")
         if rep.inframe_stop:
             penalty += 0.30
             flags.append("inframe_stop")
@@ -285,11 +335,18 @@ class DesignScorer:
         sOn = self._score_on_state(sw, details)
         pen = self._penalties(sw, tmA, tmB, details, flags)
 
-        total = (w["triggerB_activation"] * sB
-                 + w["intermediate_state"] * sInt
-                 + w["triggerA_on_state"] * sOn
-                 - w["penalties"] * pen)
+        positive = (w["triggerB_activation"] * sB
+                    + w["intermediate_state"] * sInt
+                    + w["triggerA_on_state"] * sOn)
+        total = positive - w["penalties"] * pen
+
+        # Absolute 0-100 quality: every sub-score is already measured against a
+        # fixed reference scale, so dividing by the weight sum keeps it
+        # comparable across runs / gene sets / top-N choices.
+        wsum = (w["triggerB_activation"] + w["intermediate_state"]
+                + w["triggerA_on_state"]) or 1.0
+        quality = 100.0 * positive / wsum
 
         return ScoreCard(triggerB_activation=sB, intermediate_state=sInt,
                          triggerA_on_state=sOn, penalty=pen, total=total,
-                         details=details, flags=flags)
+                         quality_percent=quality, details=details, flags=flags)

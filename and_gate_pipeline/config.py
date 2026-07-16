@@ -125,6 +125,26 @@ class PipelineConfig:
     forbid_inframe_stops: bool = True
     single_aug_after_rbs: bool = True
 
+    # Type IIS restriction sites (+ reverse complements) that break Golden
+    # Gate / MoClo assembly if they occur inside a part.  Checked on the switch
+    # in RNA space.  BsaI, BsmBI/Esp3I, SapI, BbsI.
+    forbidden_motifs: Sequence[str] = (
+        "GGUCUC", "GAGACC",     # BsaI
+        "CGUCUC", "GAGACG",     # BsmBI / Esp3I
+        "GCUCUUC", "GAAGAGC",   # SapI
+        "GAAGAC", "GUCUUC",     # BbsI
+    )
+
+    # --- cross-trigger crosstalk (Section 7D, ported from the trigger scanner)
+    unintended_match_nt_ref: float = 8.0
+    """An unintended identical / reverse-complementary stretch this long between
+    Trigger A and Trigger B counts as fully disqualifying (quality 0).  The
+    intended x/k2 connector is masked out before the comparison."""
+
+    max_unintended_match: int = 0
+    """Hard filter: reject when the longest unintended cross-match reaches this
+    many nt (0 == disabled, score-only)."""
+
     # Off-target scan
     offtarget_window: int | None = None      # defaults to Lx if None
     offtarget_max_identity: float = 0.85     # fraction identity that disqualifies

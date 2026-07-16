@@ -26,6 +26,7 @@ binding_dG(a, b)             -> Delta G of duplex formation (kcal/mol)
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Sequence
@@ -76,6 +77,19 @@ class ThermoBackend:
 
     def pair_probabilities(self, seq: str, threshold: float = 0.01):
         raise NotImplementedError
+
+    def ensemble_energy(self, seq: str) -> float:
+        """Ensemble free energy -RT ln(Q) of the sequence's fold ensemble."""
+        raise NotImplementedError
+
+    def structure_probability(self, seq: str, temperature_c: float = 37.0) -> float:
+        """Boltzmann probability that a sequence adopts its own MFE structure,
+        p = exp(-(E_mfe - E_ensemble)/kT).  1.0 == the MFE fold dominates the
+        ensemble; near 0 == the fold is unreliable."""
+        _struct, e_mfe = self.mfe(seq)
+        e_ens = self.ensemble_energy(seq)
+        kT = 0.001987 * (temperature_c + 273.15)
+        return math.exp(-(e_mfe - e_ens) / kT) if kT else 0.0
 
     def unpaired_probabilities_constrained(self, seq: str,
                                            forced_unpaired) -> list[float]:
@@ -152,6 +166,11 @@ class ViennaRNABackend(ThermoBackend):
         joined = "&".join(su.to_rna(s) for s in seqs)
         fc = self._RNA.fold_compound(joined, self._md())
         _, e = fc.mfe()
+        return float(e)
+
+    def ensemble_energy(self, seq: str) -> float:
+        fc = self._fc(seq)
+        _struct, e = fc.pf()
         return float(e)
 
     def _bpp_and_unpaired(self, seq: str):
@@ -255,6 +274,10 @@ class NupackBackend(ThermoBackend):
         # length again (verified: nupack_defect * len ~= ViennaRNA normalised).
         return float(self._nupack.defect(strands=[su.to_rna(seq)],
                                          structure=structure, model=self.model))
+
+    def ensemble_energy(self, seq: str) -> float:
+        pf = self._nupack.pfunc(strands=[su.to_rna(seq)], model=self.model)
+        return float(pf[1])
 
     def _pair_matrix(self, seq: str):
         rna = su.to_rna(seq)

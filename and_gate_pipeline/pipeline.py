@@ -109,7 +109,8 @@ def _prescore(tmA: TriggerMetrics, tmB: TriggerMetrics, pair: TriggerPair) -> fl
             + (0.2 if tmA.passes else 0) + (0.2 if tmB.passes else 0))
 
 
-def run_pipeline(gene1: str, gene2: str, cfg: PipelineConfig | None = None,
+def run_pipeline(gene1: str | None = None, gene2: str | None = None,
+                 cfg: PipelineConfig | None = None,
                  reporter: str = "",
                  transcriptome: dict | None = None,
                  essential_genes: set | None = None,
@@ -119,7 +120,17 @@ def run_pipeline(gene1: str, gene2: str, cfg: PipelineConfig | None = None,
                  max_full_score: int = 40,
                  optimize: bool = True,
                  out_dir: str | None = None,
+                 pairs: list | None = None,
+                 viz_genes: dict | None = None,
                  progress=print) -> PipelineOutput:
+    """Design AND-gate switches from two genes.
+
+    ``pairs``: pre-computed :class:`TriggerPair` list.  When supplied, the
+    built-in two-gene scan is skipped and these pairs are built/scored instead
+    -- this is how :mod:`.interop` feeds in candidates found by the standalone
+    pooled multi-gene scanner.  ``viz_genes``: {name: sequence} to arc-plot
+    (defaults to gene1/gene2).
+    """
     cfg = cfg or PipelineConfig()
     backend = get_backend(cfg)
 
@@ -131,8 +142,11 @@ def run_pipeline(gene1: str, gene2: str, cfg: PipelineConfig | None = None,
         return out
 
     # 2. target scan ------------------------------------------------------ #
-    pairs = scan_both_orientations(gene1, gene2, cfg,
-                                   max_candidates_per_orientation)
+    if pairs is None:
+        if gene1 is None or gene2 is None:
+            raise ValueError("supply gene1 and gene2, or a pre-computed `pairs` list")
+        pairs = scan_both_orientations(gene1, gene2, cfg,
+                                       max_candidates_per_orientation)
     out.n_candidates = len(pairs)
     progress(f"[scan] {len(pairs)} candidate trigger pairs "
              f"(exact matches: {sum(p.exact for p in pairs)})")
@@ -188,7 +202,13 @@ def run_pipeline(gene1: str, gene2: str, cfg: PipelineConfig | None = None,
         os.makedirs(out_dir, exist_ok=True)
         out.to_csv(os.path.join(out_dir, "and_gate_designs_ranked.csv"))
         _write_final_designs(out, cfg, os.path.join(out_dir, "final_designs.txt"))
-        _emit_visuals(out, gene1, gene2, cfg, backend, out_dir, progress)
+        if viz_genes is None:
+            viz_genes = {}
+            if gene1 is not None:
+                viz_genes["gene1"] = gene1
+            if gene2 is not None:
+                viz_genes["gene2"] = gene2
+        _emit_visuals(out, viz_genes, cfg, backend, out_dir, progress)
     return out
 
 
@@ -216,7 +236,7 @@ def _write_final_designs(out: PipelineOutput, cfg: PipelineConfig, path: str):
         fh.write("\n".join(lines))
 
 
-def _emit_visuals(out, gene1, gene2, cfg, backend, out_dir, progress):
+def _emit_visuals(out, viz_genes, cfg, backend, out_dir, progress):
     try:
         from .visualize import arc_plot, export_pair_fraction_csv
     except Exception as ex:                          # pragma: no cover
@@ -224,8 +244,8 @@ def _emit_visuals(out, gene1, gene2, cfg, backend, out_dir, progress):
         return
     viz = os.path.join(out_dir, "viz")
     os.makedirs(viz, exist_ok=True)
-    # arc plots of the two target genes (trigger accessibility context)
-    for name, seq in (("gene1", gene1), ("gene2", gene2)):
+    # arc plots of the target genes (trigger accessibility context)
+    for name, seq in (viz_genes or {}).items():
         try:
             arc_plot(seq, os.path.join(viz, f"{name}_arcs.png"), backend,
                      title=f"{name} base-pairing")
