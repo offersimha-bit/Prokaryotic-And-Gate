@@ -42,6 +42,8 @@ class TriggerMetrics:
     local_domains: dict = field(default_factory=dict)   # domain -> mean openness
     local_context: dict = field(default_factory=dict)   # flank -> mean openness
     local_nucleation: float | None = None  # the domain the toehold nucleates on
+    local_worst_track: list = field(default_factory=list)  # per-nt worst case
+    local_worst: float | None = None       # mean of the worst-case track
 
     def summary(self) -> dict:
         out = {
@@ -63,6 +65,8 @@ class TriggerMetrics:
                                     for k, v in self.local_domains.items()}
             out["local_context"] = {k: round(v, 4)
                                     for k, v in self.local_context.items()}
+            out["local_worst"] = (None if self.local_worst is None
+                                  else round(self.local_worst, 4))
         return out
 
 
@@ -117,8 +121,33 @@ def _measure_local(tm: TriggerMetrics, name: str, gene: str, start: int,
     tm.local_seed_3 = seed3
     tm.local_domains = dom
     tm.local_nucleation = dom.get(nucleation) if nucleation else None
-    tm.local_context = backend.local_context_accessibility(
-        gene, start, length, cfg.flanking_lengths)
+    # worst-case envelope across crops, applied PER NUCLEOTIDE.
+    #
+    # The flank is a modelling choice, not a measurement: we do not know how
+    # much native context the site really folds with (transcription is
+    # co-transcriptional, ribosomes cover part of it, and the boundary moves).
+    # So instead of trusting one crop, take the least favourable value each
+    # nucleotide shows across all of them.  A base that is buried at ANY crop
+    # counts as buried -- a site that looks open only at one flank is not open.
+    #
+    # Per-nucleotide matters: which crop buries a given base varies along the
+    # footprint, so the minimum of the per-flank MEANS would miss a site whose
+    # 5' half is buried at one flank and 3' half at another.
+    tracks = backend.local_context_tracks(gene, start, length,
+                                          cfg.flanking_lengths)
+    tm.local_context = {f: sum(v for v in t if v is not None) / max(
+        1, sum(1 for v in t if v is not None))
+        for f, t in tracks.items()}
+    if tracks:
+        worst = []
+        for i in range(length):
+            vals = [t[i] for t in tracks.values()
+                    if i < len(t) and t[i] is not None]
+            if vals:
+                worst.append(min(vals))
+        if worst:
+            tm.local_worst_track = worst
+            tm.local_worst = sum(worst) / len(worst)
 
 
 def evaluate_trigger(name: str, gene: str, start: int, end: int,

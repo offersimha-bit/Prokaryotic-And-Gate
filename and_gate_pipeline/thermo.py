@@ -134,6 +134,18 @@ class ThermoBackend:
         raise NotImplementedError(
             f"{self.name} has no local (RNAplfold) accessibility model")
 
+    def local_context_tracks(self, seq: str, start: int, length: int,
+                             flanks) -> dict:
+        """``{flank: [P(unpaired) for each nucleotide of the footprint]}``.
+
+        Per-nucleotide, not per-flank means: which crop buries a given base
+        varies along the footprint, so a worst-case rule has to be applied
+        position by position.  Collapsing to a mean first destroys exactly the
+        information such a rule needs.
+        """
+        raise NotImplementedError(
+            f"{self.name} has no local (RNAplfold) accessibility model")
+
     def local_context_accessibility(self, seq: str, start: int, length: int,
                                     flanks) -> dict:
         """Mean openness of the footprint when only +/-flank nt of native
@@ -141,8 +153,7 @@ class ThermoBackend:
 
         Cropping is deliberate: it asks whether the site and its immediate
         neighbourhood are locally structured, without letting distant sequence
-        dominate.  The per-flank spread is the raw material for a worst-case
-        aggregation -- a site that looks open only at one crop is not open.
+        dominate.
         """
         raise NotImplementedError(
             f"{self.name} has no local (RNAplfold) accessibility model")
@@ -426,10 +437,10 @@ class ViennaRNABackend(ThermoBackend):
                 domain_access[name] = value
         return site_mean, seed_5, seed_3, domain_access
 
-    def local_context_accessibility(self, seq: str, start: int, length: int,
-                                    flanks) -> dict:
+    def local_context_tracks(self, seq: str, start: int, length: int,
+                             flanks) -> dict:
         rna = su.to_rna(seq)
-        out: dict[int, float] = {}
+        out: dict[int, list] = {}
         for flank in flanks:
             lo = max(0, start - flank)
             hi = min(len(rna), start + length + flank)
@@ -438,11 +449,20 @@ class ViennaRNABackend(ThermoBackend):
                 continue
             profile = self._plfold_profile(context, 1)
             # index the footprint inside the cropped context, not the transcript
-            value = self._mean_available(
-                self._segment_from_profile(profile, start - lo + i, 1)
-                for i in range(length))
+            track = [self._segment_from_profile(profile, start - lo + i, 1)
+                     for i in range(length)]
+            if any(v is not None for v in track):
+                out[int(flank)] = track
+        return out
+
+    def local_context_accessibility(self, seq: str, start: int, length: int,
+                                    flanks) -> dict:
+        tracks = self.local_context_tracks(seq, start, length, flanks)
+        out: dict[int, float] = {}
+        for flank, track in tracks.items():
+            value = self._mean_available(track)
             if value is not None:
-                out[int(flank)] = value
+                out[flank] = value
         return out
 
 
@@ -533,6 +553,10 @@ class NupackBackend(ThermoBackend):
                                     flanks) -> dict:
         return self._vienna().local_context_accessibility(
             seq, start, length, flanks)
+
+    def local_context_tracks(self, seq: str, start: int, length: int,
+                             flanks) -> dict:
+        return self._vienna().local_context_tracks(seq, start, length, flanks)
 
     def pair_probabilities(self, seq: str, threshold: float = 0.01):
         rna, mat = self._pair_matrix(seq)

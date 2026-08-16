@@ -100,6 +100,19 @@ def _region_openness(structure: str, start: int, length: int) -> float:
     return region.count(".") / len(region) if region else 0.0
 
 
+def _accessibility_of(tm, cfg: PipelineConfig) -> float:
+    """The accessibility number stage 3 ranks on -- see cfg.accessibility_metric.
+
+    Falls back to the global metric when the local one was not measured (NUPACK
+    without ViennaRNA, or ``use_local_accessibility`` off), so switching the
+    metric can never silently score a candidate as zero.
+    """
+    if getattr(cfg, "accessibility_metric", "global") == "local_worst":
+        if tm.local_worst is not None:
+            return tm.local_worst
+    return tm.accessibility
+
+
 def evaluate_quality(pair, tmA, tmB, backend, cfg: PipelineConfig
                      ) -> CandidateQuality:
     """Measure the four selection criteria for one trigger pair.
@@ -112,7 +125,8 @@ def evaluate_quality(pair, tmA, tmB, backend, cfg: PipelineConfig
     q = CandidateQuality()
 
     # (1) accessibility in native context -- straight from stage 2
-    q.accessibility = 0.5 * (tmA.accessibility + tmB.accessibility)
+    acc_a, acc_b = _accessibility_of(tmA, cfg), _accessibility_of(tmB, cfg)
+    q.accessibility = 0.5 * (acc_a + acc_b)
 
     # (2) does the trigger hide its own functional region when folded alone?
     #     Trigger A's functional region is x + r1 (what pairs the switch's
@@ -147,6 +161,9 @@ def evaluate_quality(pair, tmA, tmB, backend, cfg: PipelineConfig
 
     q.raw = {
         "acc_A": tmA.accessibility, "acc_B": tmB.accessibility,
+        "acc_metric": getattr(cfg, "accessibility_metric", "global"),
+        "acc_A_ranked": acc_a, "acc_B_ranked": acc_b,
+        "acc_A_worst": tmA.local_worst, "acc_B_worst": tmB.local_worst,
         "open_A": open_a, "open_B": open_b,
         "p_fold_A": p_a, "p_fold_B": p_b,
         "stick_nt": stick_nt, "subst_nt": subst_nt,

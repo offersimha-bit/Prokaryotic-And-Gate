@@ -473,7 +473,7 @@ def test_scorecard_quality_and_crosstalk_present():
 def test_trigger_is_a_contiguous_slice_of_its_gene():
     """The invariant the whole project rests on: nothing is synthesised."""
     from and_gate_pipeline.target_scan import scan_both_orientations
-    pairs = scan_both_orientations(examples.GENE1, examples.GENE2, CFG)
+    pairs = scan_both_orientations(examples.SYNTHETIC_GENE1, examples.SYNTHETIC_GENE2, CFG)
     assert pairs, "no candidates on the example genes"
     for p in pairs[:20]:
         for trig, gene in ((p.triggerA, p.gene_a), (p.triggerB, p.gene_b)):
@@ -489,7 +489,7 @@ def test_verify_pair_rejects_a_scrambled_trigger():
     from and_gate_pipeline.target_scan import (scan_both_orientations,
                                                verify_pair,
                                                TriggerIntegrityError)
-    p = scan_both_orientations(examples.GENE1, examples.GENE2, CFG)[0]
+    p = scan_both_orientations(examples.SYNTHETIC_GENE1, examples.SYNTHETIC_GENE2, CFG)[0]
     p.triggerA.pos_x += 1              # same sequence, wrong coordinate
     try:
         verify_pair(p)
@@ -501,7 +501,7 @@ def test_verify_pair_rejects_a_scrambled_trigger():
 def test_pooled_scan_needs_two_distinct_records():
     """An AND gate needs two inputs, not one gene sensing itself twice."""
     from and_gate_pipeline.target_scan import scan_pool
-    genes = [("g1", examples.GENE1), ("g2", examples.GENE2)]
+    genes = [("g1", examples.SYNTHETIC_GENE1), ("g2", examples.SYNTHETIC_GENE2)]
     pairs = scan_pool(genes, CFG)
     assert pairs
     for p in pairs:
@@ -513,11 +513,11 @@ def test_pooled_scan_matches_two_gene_scan():
     they are now one implementation, so this is a regression guard on the
     k-mer index rather than on two separate code paths."""
     from and_gate_pipeline.target_scan import scan_pool, scan_both_orientations
-    genes = [("g1", examples.GENE1), ("g2", examples.GENE2)]
+    genes = [("g1", examples.SYNTHETIC_GENE1), ("g2", examples.SYNTHETIC_GENE2)]
     pooled = {(p.triggerA.seq, p.triggerB.seq)
               for p in scan_pool(genes, CFG) if p.exact}
     direct = {(p.triggerA.seq, p.triggerB.seq)
-              for p in scan_both_orientations(examples.GENE1, examples.GENE2, CFG)
+              for p in scan_both_orientations(examples.SYNTHETIC_GENE1, examples.SYNTHETIC_GENE2, CFG)
               if p.exact}
     assert pooled == direct, "pooled and two-gene scans disagree"
 
@@ -560,7 +560,7 @@ def test_selection_rejects_near_identical_windows():
     from and_gate_pipeline.target_scan import scan_both_orientations
     from and_gate_pipeline.select import select, evaluate_quality
     from and_gate_pipeline.filtering import evaluate_pair_triggers
-    pairs = scan_both_orientations(examples.GENE1, examples.GENE2, CFG)[:12]
+    pairs = scan_both_orientations(examples.SYNTHETIC_GENE1, examples.SYNTHETIC_GENE2, CFG)[:12]
     scored = []
     for p in pairs:
         tmA, tmB = evaluate_pair_triggers(p, CFG, BK)
@@ -577,7 +577,7 @@ def test_quality_is_absolute_not_pool_relative():
     from and_gate_pipeline.target_scan import scan_both_orientations
     from and_gate_pipeline.select import evaluate_quality
     from and_gate_pipeline.filtering import evaluate_pair_triggers
-    p = scan_both_orientations(examples.GENE1, examples.GENE2, CFG)[0]
+    p = scan_both_orientations(examples.SYNTHETIC_GENE1, examples.SYNTHETIC_GENE2, CFG)[0]
     tmA, tmB = evaluate_pair_triggers(p, CFG, BK)
     q1 = evaluate_quality(p, tmA, tmB, BK, CFG)
     q2 = evaluate_quality(p, tmA, tmB, BK, CFG)
@@ -658,6 +658,94 @@ def test_trigger_b_nucleates_on_r2():
     assert nucleation == "r2"
     assert layout["k2"] == (0, CFG.Lx)
     assert layout["r2"] == (CFG.Lx, CFG.resolved_len_r2())
+
+
+def test_worst_track_is_the_per_nucleotide_minimum_across_crops():
+    """The envelope must be built position by position.
+
+    Taking the minimum of the per-flank MEANS would miss a site whose 5' half is
+    buried at one crop and 3' half at another -- each crop's mean looks fine.
+    """
+    rng = random.Random(23)
+    gene = "".join(rng.choice("ACGU") for _ in range(900))
+    start, length = 400, 36
+    tracks = BK_LOCAL.local_context_tracks(gene, start, length,
+                                           CFG.flanking_lengths)
+    assert len(tracks) >= 2
+    for track in tracks.values():
+        assert len(track) == length
+    worst = [min(t[i] for t in tracks.values()) for i in range(length)]
+    # the envelope is at or below every individual crop, at every position
+    for track in tracks.values():
+        assert all(w <= v + 1e-12 for w, v in zip(worst, track))
+    # and at or below the minimum of the per-flank means -- the weaker rule
+    min_of_means = min(sum(t) / length for t in tracks.values())
+    assert sum(worst) / length <= min_of_means + 1e-12
+
+
+def test_worst_track_is_recorded_and_is_not_a_rescaling():
+    """Worst-track must reorder candidates, not just shrink every number.
+
+    If it were a constant multiple of the global metric it would be a no-op for
+    ranking and not worth the cost.
+    """
+    from and_gate_pipeline.filtering import evaluate_trigger
+    rng = random.Random(29)
+    ratios = []
+    for _ in range(6):
+        gene = "".join(rng.choice("ACGU") for _ in range(900))
+        start = 400
+        end = start + CFG.len_k1 + CFG.len_a + CFG.Lx + CFG.resolved_len_r1()
+        tm = evaluate_trigger("TriggerA", gene, start, end, CFG, BK)
+        assert tm.local_worst is not None
+        assert len(tm.local_worst_track) == end - start
+        assert 0.0 <= tm.local_worst <= 1.0
+        if tm.accessibility > 0:
+            ratios.append(tm.local_worst / tm.accessibility)
+    assert max(ratios) - min(ratios) > 0.05, (
+        "worst-track tracks the global metric by a constant factor; it would "
+        "not change any ranking")
+
+
+def test_accessibility_metric_switch_selects_the_ranked_number():
+    """cfg.accessibility_metric picks which number stage 3 ranks on, and must
+    fall back rather than score a candidate as zero when the local one is
+    absent."""
+    from and_gate_pipeline.select import _accessibility_of
+    from and_gate_pipeline.filtering import TriggerMetrics
+    tm = TriggerMetrics(name="TriggerA", gene="A", start=0, end=1)
+    tm.accessibility = 0.62
+    tm.local_worst = 0.21
+    assert _accessibility_of(tm, PipelineConfig()) == 0.62
+    worst_cfg = PipelineConfig(accessibility_metric="local_worst")
+    assert _accessibility_of(tm, worst_cfg) == 0.21
+    tm.local_worst = None                       # never measured
+    assert _accessibility_of(tm, worst_cfg) == 0.62
+
+
+# ---- bundled real genes ---------------------------------------------------- #
+def test_bundled_genes_are_intact_open_reading_frames():
+    """thrA/thrC ship as data files; a truncated or corrupted one must fail
+    loudly here rather than silently change every downstream number."""
+    stops = {"UAA", "UAG", "UGA"}
+    for name, length in (("thrA", 2463), ("thrC", 1287)):
+        seq = su.to_rna(examples.load_gene(name))
+        assert len(seq) == length, f"{name} is {len(seq)} nt, expected {length}"
+        assert len(seq) % 3 == 0
+        assert seq.startswith("AUG")
+        codons = [seq[i:i + 3] for i in range(0, len(seq), 3)]
+        assert codons[-1] in stops
+        assert not [c for c in codons[:-1] if c in stops], \
+            f"{name} has an internal stop codon"
+        assert set(seq) <= set("ACGU")
+
+
+def test_bundled_genes_are_longer_than_the_plfold_window():
+    """The point of using real genes: below the window, RNAplfold silently
+    degenerates to a global fold and stage 2 cannot exercise local folding at
+    all.  The old 98-nt synthetic pair had exactly that problem."""
+    for name in ("thrA", "thrC"):
+        assert len(examples.load_gene(name)) > CFG.local_window_size
 
 
 # ---- stage 6: energetic, expression-weighted off-target -------------------- #

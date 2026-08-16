@@ -123,6 +123,37 @@ class PipelineConfig:
     local_max_bp_span: int = 200
     """Maximum base-pair span allowed inside the RNAplfold window."""
 
+    stage2_max_candidates: int | None = 400
+    """Cap on how many scanned pairs reach stage 2.  None == no cap.
+
+    Stage 2 costs ~1.2 s per pair (five flanked folds per trigger, plus the
+    RNAplfold tracks), and a real gene pair produces thousands of candidates:
+    thrA x thrC yields 3680, which is over an hour before stage 3 even starts.
+    The old synthetic demo produced 113 and so never exposed this.
+
+    Candidates are ordered by (exact connector match, then lowest Hamming)
+    before the cap.  That ordering is cheap but weak -- it is a triage rule, not
+    a quality ranking, and among the 1331 exact matches thrA/thrC produces it is
+    effectively arbitrary.  A real cheap prefilter (GC, homopolymer, connector
+    duplex dG) belongs here; until then, raise the cap rather than trust that
+    the dropped candidates were the bad ones."""
+
+    accessibility_metric: str = "global"
+    """Which accessibility number stage 3 ranks on: ``"global"`` or
+    ``"local_worst"``.
+
+    ``global``      the historical one -- a per-base mean from folding the
+                    +/-``accessibility_flank`` window as a whole.
+    ``local_worst`` the per-nucleotide worst case across every flank, measured
+                    with RNAplfold (see ``use_local_accessibility``).
+
+    Default is ``global`` so this switch changes nothing on its own; flip it to
+    compare rankings.  ``local_worst`` is strictly the more pessimistic of the
+    two, so absolute values are NOT comparable between the settings -- only
+    rankings are.  Note ``min_accessibility`` was calibrated against ``global``
+    and would reject far more under ``local_worst``; it is inert while
+    ``enforce_performance_gates`` is False, which is the default."""
+
     binding_seed_len: int = 8
     """Length of the nucleation seed scored at each trigger end.
 

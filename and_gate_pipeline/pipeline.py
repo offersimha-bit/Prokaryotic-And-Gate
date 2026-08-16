@@ -209,8 +209,19 @@ def run_pipeline(gene1: str | None = None, gene2: str | None = None,
         return out
 
     # 3. STAGE 2 filtering ----------------------------------------------- #
+    # Triage before the expensive stage: prefer exact connector matches, then
+    # lowest Hamming.  This is a cost control, NOT a quality ranking -- see
+    # cfg.stage2_max_candidates.  Anything dropped here is never measured, so
+    # the cap is reported rather than applied silently.
+    to_measure = pairs
+    cap = getattr(cfg, "stage2_max_candidates", None)
+    if cap is not None and len(pairs) > cap:
+        to_measure = sorted(pairs, key=lambda p: (not p.exact, p.hamming))[:cap]
+        progress(f"[filter] triaged {len(pairs)} -> {cap} pairs before stage 2 "
+                 f"(cost cap, not a quality filter; "
+                 f"{len(pairs) - cap} never measured)")
     measured = []
-    for p in pairs:
+    for p in to_measure:
         try:
             tmA, tmB = evaluate_pair_triggers(p, cfg, backend)
         except Exception as ex:                      # pragma: no cover
