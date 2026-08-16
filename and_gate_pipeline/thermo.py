@@ -99,6 +99,57 @@ class ThermoBackend:
         the unconstrained distribution."""
         return self.unpaired_probabilities(seq)
 
+    # ---- local (RNAplfold) accessibility ---------------------------------- #
+    def segment_unpaired_probability(self, seq: str, start: int,
+                                     length: int) -> float | None:
+        """Joint probability that ``seq[start:start+length]`` is ENTIRELY
+        unpaired, under a sliding-window (RNAplfold) model.
+
+        This is not the mean of per-base probabilities.  A 4-nt toehold seed
+        with per-base openness 0.9 has mean 0.9 but joint openness ~0.65 if the
+        bases are independent -- and far less if they are in the same helix.
+        Nucleation needs them open at the same time, so the joint value is the
+        one that belongs in a rate.
+
+        Returns None when the window does not fit the requested segment.
+        """
+        raise NotImplementedError(
+            f"{self.name} has no local (RNAplfold) accessibility model")
+
+    def local_site_metrics(self, seq: str, start: int, length: int,
+                           domains=None, seed_len: int = 8):
+        """Accessibility of one binding footprint inside its native transcript.
+
+        Returns ``(site_mean, seed_5, seed_3, domain_access)``:
+
+        site_mean     mean per-base openness across the footprint
+        seed_5/seed_3 JOINT openness of the ``seed_len`` nucleotides at the 5'
+                      and 3' end -- the two places a toehold can nucleate
+        domain_access mean per-base openness per named domain, from a mapping
+                      ``{name: (offset_into_footprint, length)}``
+
+        ``domain_access`` is what makes a masked arm visible: the footprint as a
+        whole can look open while the one domain that has to nucleate is not.
+        """
+        raise NotImplementedError(
+            f"{self.name} has no local (RNAplfold) accessibility model")
+
+    def local_context_accessibility(self, seq: str, start: int, length: int,
+                                    flanks) -> dict:
+        """Mean openness of the footprint when only +/-flank nt of native
+        context are folded, for each flank in ``flanks``.
+
+        Cropping is deliberate: it asks whether the site and its immediate
+        neighbourhood are locally structured, without letting distant sequence
+        dominate.  The per-flank spread is the raw material for a worst-case
+        aggregation -- a site that looks open only at one crop is not open.
+        """
+        raise NotImplementedError(
+            f"{self.name} has no local (RNAplfold) accessibility model")
+
+    def supports_local_accessibility(self) -> bool:
+        return False
+
     # ---- quantities derived once the primitives above exist -------------- #
     def accessibility(self, seq: str, start: int, length: int) -> float:
         up = self.unpaired_probabilities(seq)
@@ -139,13 +190,17 @@ class ThermoBackend:
 class ViennaRNABackend(ThermoBackend):
     name = "ViennaRNA"
 
-    def __init__(self, temperature_c: float = 37.0):
+    def __init__(self, temperature_c: float = 37.0,
+                 local_window_size: int = 240, local_max_bp_span: int = 200):
         import RNA  # noqa: local import so the module loads without RNA present
         self._RNA = RNA
         self.T = float(temperature_c)
         RNA.cvar.temperature = self.T  # affects cofold() and legacy calls
         # dangles/params left at ViennaRNA defaults (Turner 2004), matching the
         # VISTA notebooks' ViennaRNA usage.
+        self.local_window_size = int(local_window_size)
+        self.local_max_bp_span = int(local_max_bp_span)
+        self._plfold_cache: dict[tuple[str, int], list] = {}
 
     def _md(self):
         md = self._RNA.md()
@@ -282,6 +337,114 @@ class ViennaRNABackend(ThermoBackend):
         _n, _ps, _unpaired, pairs = self._bpp_and_unpaired(seq)
         return [(i, j, p) for (i, j, p) in pairs if p >= threshold]
 
+    # ---- local (RNAplfold) accessibility ---------------------------------- #
+    def supports_local_accessibility(self) -> bool:
+        return True
+
+    def _plfold_profile(self, seq: str, max_unpaired: int) -> list:
+        """Unpaired-segment probability profile from ViennaRNA's sliding window.
+
+        ``profile[end][u]`` is P(the u-nt segment ENDING at 1-based position
+        ``end`` is entirely unpaired) -- the quantity RNAplfold's ``-u`` option
+        produces.  Cached per (sequence, max_unpaired): stage 2 asks about
+        several domains of the same footprint, and each would otherwise repeat
+        the whole windowed partition function.
+        """
+        rna = su.to_rna(seq)
+        key = (rna, int(max_unpaired))
+        if key in self._plfold_cache:
+            return self._plfold_cache[key]
+        RNA = self._RNA
+        md = self._md()
+        # The window must be able to hold the longest segment we ask about,
+        # plus room for the structure that closes around it.
+        md.window_size = min(max(self.local_window_size, max_unpaired + 20),
+                             len(rna))
+        md.max_bp_span = min(self.local_max_bp_span, md.window_size)
+        data: list = [None] * (len(rna) + 1)
+
+        def callback(values, _size, index, _maxsize, what, store):
+            if what & RNA.PROBS_WINDOW_UP:
+                store[index] = list(values)
+
+        fc = RNA.fold_compound(rna, md, RNA.OPTION_WINDOW)
+        ok = fc.probs_window(max_unpaired, RNA.PROBS_WINDOW_UP, callback, data)
+        if not ok:
+            raise RuntimeError("ViennaRNA probs_window failed")
+        self._plfold_cache[key] = data
+        return data
+
+    @staticmethod
+    def _segment_from_profile(profile: list, start: int,
+                              length: int) -> float | None:
+        # ViennaRNA's callback index is 1-based and names the segment END, so a
+        # 0-based segment [start, start+length) ends at index start+length.
+        end = start + length
+        if end >= len(profile) or profile[end] is None:
+            return None
+        row = profile[end]
+        if length >= len(row):
+            return None
+        value = row[length]
+        return None if value is None else float(value)
+
+    def segment_unpaired_probability(self, seq: str, start: int,
+                                     length: int) -> float | None:
+        if length <= 0:
+            return None
+        profile = self._plfold_profile(seq, max(length, 1))
+        return self._segment_from_profile(profile, start, length)
+
+    @staticmethod
+    def _mean_available(values) -> float | None:
+        vals = [float(v) for v in values if v is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    def local_site_metrics(self, seq: str, start: int, length: int,
+                           domains=None, seed_len: int = 8):
+        rna = su.to_rna(seq)
+        max_unpaired = max(length, seed_len, 1)
+        profile = self._plfold_profile(rna, max_unpaired)
+
+        site_mean = self._mean_available(
+            self._segment_from_profile(profile, start + i, 1)
+            for i in range(length))
+        if site_mean is None:
+            raise RuntimeError(
+                f"ViennaRNA returned no accessibility for [{start}, {start + length})")
+
+        seed = min(seed_len, length)
+        seed_5 = self._segment_from_profile(profile, start, seed)
+        seed_3 = self._segment_from_profile(profile, start + length - seed, seed)
+
+        domain_access: dict[str, float] = {}
+        for name, (offset, dom_len) in (domains or {}).items():
+            value = self._mean_available(
+                self._segment_from_profile(profile, start + offset + i, 1)
+                for i in range(dom_len))
+            if value is not None:
+                domain_access[name] = value
+        return site_mean, seed_5, seed_3, domain_access
+
+    def local_context_accessibility(self, seq: str, start: int, length: int,
+                                    flanks) -> dict:
+        rna = su.to_rna(seq)
+        out: dict[int, float] = {}
+        for flank in flanks:
+            lo = max(0, start - flank)
+            hi = min(len(rna), start + length + flank)
+            context = rna[lo:hi]
+            if not context:
+                continue
+            profile = self._plfold_profile(context, 1)
+            # index the footprint inside the cropped context, not the transcript
+            value = self._mean_available(
+                self._segment_from_profile(profile, start - lo + i, 1)
+                for i in range(length))
+            if value is not None:
+                out[int(flank)] = value
+        return out
+
 
 # --------------------------------------------------------------------------- #
 # NUPACK implementation (used when installed; mirrors Toehold-VISTA)          #
@@ -351,6 +514,26 @@ class NupackBackend(ThermoBackend):
     def opening_energy_conditioned(self, seq: str, indices, given) -> float:
         return self._vienna().opening_energy_conditioned(seq, indices, given)
 
+    # NUPACK 4 has no sliding-window (RNAplfold) analysis at all -- there is no
+    # equivalent of probs_window in its API -- so local accessibility is
+    # delegated wholesale, exactly as the constraint-based quantities are.
+    def supports_local_accessibility(self) -> bool:
+        return True
+
+    def segment_unpaired_probability(self, seq: str, start: int,
+                                     length: int) -> float | None:
+        return self._vienna().segment_unpaired_probability(seq, start, length)
+
+    def local_site_metrics(self, seq: str, start: int, length: int,
+                           domains=None, seed_len: int = 8):
+        return self._vienna().local_site_metrics(seq, start, length,
+                                                 domains, seed_len)
+
+    def local_context_accessibility(self, seq: str, start: int, length: int,
+                                    flanks) -> dict:
+        return self._vienna().local_context_accessibility(
+            seq, start, length, flanks)
+
     def pair_probabilities(self, seq: str, threshold: float = 0.01):
         rna, mat = self._pair_matrix(seq)
         n = len(rna)
@@ -377,15 +560,23 @@ class _BackendKey:
 
 
 def _make_backend(cfg) -> ThermoBackend:
+    window = getattr(cfg, "local_window_size", 240)
+    span = getattr(cfg, "local_max_bp_span", 200)
     if getattr(cfg, "prefer_nupack", True):
         try:
-            return NupackBackend(
+            backend = NupackBackend(
                 temperature_c=cfg.temperature_c, sodium=cfg.sodium,
                 magnesium=cfg.magnesium, material=cfg.material,
                 ensemble=cfg.ensemble)
+            # the delegate carries the window parameters, since NUPACK itself
+            # has no sliding-window model to configure
+            backend._vienna().local_window_size = int(window)
+            backend._vienna().local_max_bp_span = int(span)
+            return backend
         except Exception:
             pass
-    return ViennaRNABackend(temperature_c=cfg.temperature_c)
+    return ViennaRNABackend(temperature_c=cfg.temperature_c,
+                            local_window_size=window, local_max_bp_span=span)
 
 
 _CACHE: dict = {}

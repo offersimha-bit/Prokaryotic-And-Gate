@@ -35,20 +35,90 @@ class TriggerMetrics:
     open_sed: float = 0.0                             # at accessibility_flank
     passes: bool = False
 
+    # -- local (RNAplfold) measurements; see cfg.use_local_accessibility ---- #
+    local_site: float | None = None       # mean per-base openness, whole transcript
+    local_seed_5: float | None = None     # JOINT openness of the 5' seed
+    local_seed_3: float | None = None     # JOINT openness of the 3' seed
+    local_domains: dict = field(default_factory=dict)   # domain -> mean openness
+    local_context: dict = field(default_factory=dict)   # flank -> mean openness
+    local_nucleation: float | None = None  # the domain the toehold nucleates on
+
     def summary(self) -> dict:
-        return {
+        out = {
             "name": self.name, "start": self.start, "end": self.end,
             "accessibility": round(self.accessibility, 4),
             "open_sed": round(self.open_sed, 4),
             "mfe_100": round(self.per_flank.get(100, {}).get("mfe", float("nan")), 2),
             "passes": self.passes,
         }
+        if self.local_site is not None:
+            out["local_site"] = round(self.local_site, 4)
+            out["local_seed_5"] = (None if self.local_seed_5 is None
+                                   else round(self.local_seed_5, 6))
+            out["local_seed_3"] = (None if self.local_seed_3 is None
+                                   else round(self.local_seed_3, 6))
+            out["local_nucleation"] = (None if self.local_nucleation is None
+                                       else round(self.local_nucleation, 4))
+            out["local_domains"] = {k: round(v, 4)
+                                    for k, v in self.local_domains.items()}
+            out["local_context"] = {k: round(v, 4)
+                                    for k, v in self.local_context.items()}
+        return out
 
 
 def _flanked(gene: str, start: int, end: int, flank: int):
     lo = max(0, start - flank)
     hi = min(len(gene), end + flank)
     return gene[lo:hi], start - lo, end - lo
+
+
+def _domain_layout(name: str, cfg: PipelineConfig):
+    """Offsets of each domain INSIDE the trigger footprint, plus the domain the
+    toehold actually nucleates on.
+
+    Trigger A is laid out k1-a-x-r1 and nucleates on ``a`` (only ``a`` is
+    single-stranded in the OFF state; ``x`` joins it once Trigger B has bound).
+    Trigger B is k2-r2 and nucleates on ``r2``, the toehold added to fix the
+    spec error where B had none.
+    """
+    if name == "TriggerA":
+        k1, a, lx = cfg.len_k1, cfg.len_a, cfg.Lx
+        return {
+            "k1": (0, k1),
+            "a": (k1, a),
+            "x": (k1 + a, lx),
+            "r1": (k1 + a + lx, cfg.resolved_len_r1()),
+        }, "a"
+    if name == "TriggerB":
+        return {
+            "k2": (0, cfg.Lx),
+            "r2": (cfg.Lx, cfg.resolved_len_r2()),
+        }, "r2"
+    return {}, None
+
+
+def _measure_local(tm: TriggerMetrics, name: str, gene: str, start: int,
+                   end: int, cfg: PipelineConfig, backend: ThermoBackend):
+    """Attach RNAplfold measurements to ``tm``.
+
+    Recorded only -- the stage-2 gate below still runs on the global fold.
+    Moving the gate onto these numbers is a separate change, because the two
+    quantities are on different scales and the current thresholds were set
+    against the global one.
+    """
+    domains, nucleation = _domain_layout(name, cfg)
+    length = end - start
+    if length <= 0:
+        return
+    site, seed5, seed3, dom = backend.local_site_metrics(
+        gene, start, length, domains, seed_len=cfg.binding_seed_len)
+    tm.local_site = site
+    tm.local_seed_5 = seed5
+    tm.local_seed_3 = seed3
+    tm.local_domains = dom
+    tm.local_nucleation = dom.get(nucleation) if nucleation else None
+    tm.local_context = backend.local_context_accessibility(
+        gene, start, length, cfg.flanking_lengths)
 
 
 def evaluate_trigger(name: str, gene: str, start: int, end: int,
@@ -76,6 +146,9 @@ def evaluate_trigger(name: str, gene: str, start: int, end: int,
         tm.open_sed = tm.per_flank[gate_flank]["sed"]
     tm.passes = (tm.accessibility >= cfg.min_accessibility
                  and tm.open_sed <= cfg.max_trigger_sed)
+    if getattr(cfg, "use_local_accessibility", False) and \
+            backend.supports_local_accessibility():
+        _measure_local(tm, name, gene, start, end, cfg, backend)
     return tm
 
 

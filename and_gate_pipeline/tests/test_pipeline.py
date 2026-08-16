@@ -23,6 +23,9 @@ from and_gate_pipeline import examples
 
 CFG = PipelineConfig()
 BK = get_backend(CFG)
+# the local-accessibility tests reach for ViennaRNA directly: NUPACK has no
+# sliding-window model, so the NUPACK backend only delegates to this one
+BK_LOCAL = BK._vienna() if hasattr(BK, "_vienna") else BK
 
 
 # ---- sequence utils -------------------------------------------------------- #
@@ -565,6 +568,164 @@ def test_quality_is_absolute_not_pool_relative():
     assert q1.objectives() == q2.objectives()
     for v in q1.objectives():
         assert 0.0 <= v <= 1.0
+
+
+# ---- stage 2: local (RNAplfold) accessibility ------------------------------ #
+def test_plfold_matches_viennarna_reference():
+    """The port must reproduce RNA.pfl_fold_up, the independent RNAplfold path.
+
+    This is a software-correctness check, not a claim that accessibility
+    predicts switch performance.
+    """
+    import RNA
+    rng = random.Random(2024)
+    seq = "".join(rng.choice("ACGU") for _ in range(400))
+    ref = RNA.pfl_fold_up(seq, 8, BK_LOCAL.local_window_size,
+                          BK_LOCAL.local_max_bp_span)
+    profile = BK_LOCAL._plfold_profile(seq, 8)
+    compared = 0
+    for start in range(0, len(seq) - 8, 7):
+        for length in (1, 4, 8):
+            mine = BK_LOCAL._segment_from_profile(profile, start, length)
+            if mine is None:
+                continue
+            assert abs(mine - ref[start + length][length]) <= 1e-9
+            compared += 1
+    assert compared > 100
+
+
+def test_seed_openness_is_joint_not_a_per_base_mean():
+    """A contiguous seed must be scored as one event.
+
+    The mean of per-base probabilities is optimistic: it lets an open base at
+    one end pay for a paired base at the other, while nucleation needs the whole
+    seed open at once.  The joint value can therefore only be <= the mean.
+    """
+    rng = random.Random(5)
+    seq = "".join(rng.choice("ACGU") for _ in range(300))
+    start, seed = 120, 8
+    joint = BK_LOCAL.segment_unpaired_probability(seq, start, seed)
+    profile = BK_LOCAL._plfold_profile(seq, seed)
+    per_base = [BK_LOCAL._segment_from_profile(profile, start + i, 1)
+                for i in range(seed)]
+    mean_per_base = sum(per_base) / seed
+    assert joint is not None
+    assert 0.0 <= joint <= mean_per_base + 1e-12
+
+
+def test_domain_accessibility_separates_arms_the_footprint_average_hides():
+    """Per-domain openness must not be recoverable from the footprint mean.
+
+    This is the measurement the r2*/toehold question needs: a footprint can
+    average as half-open while the one domain that has to nucleate is buried.
+    """
+    from and_gate_pipeline.filtering import _domain_layout, evaluate_trigger
+    rng = random.Random(1)
+    gene = "".join(rng.choice("ACGU") for _ in range(600))
+    start = 200
+    end = start + CFG.len_k1 + CFG.len_a + CFG.Lx + CFG.resolved_len_r1()
+    tm = evaluate_trigger("TriggerA", gene, start, end, CFG, BK)
+    layout, nucleation = _domain_layout("TriggerA", CFG)
+    assert nucleation == "a"
+    assert set(tm.local_domains) == set(layout)
+    assert tm.local_nucleation == tm.local_domains["a"]
+    # every domain lies inside the footprint
+    for _name, (offset, length) in layout.items():
+        assert 0 <= offset and offset + length <= end - start
+
+
+def test_trigger_b_nucleates_on_r2():
+    """Trigger B's toehold is r2 -- the domain added to fix the spec error where
+    B had no single-stranded region to bind through at all."""
+    from and_gate_pipeline.filtering import _domain_layout
+    layout, nucleation = _domain_layout("TriggerB", CFG)
+    assert nucleation == "r2"
+    assert layout["k2"] == (0, CFG.Lx)
+    assert layout["r2"] == (CFG.Lx, CFG.resolved_len_r2())
+
+
+# ---- stage 6: energetic, expression-weighted off-target -------------------- #
+def test_relative_binding_is_referenced_to_the_cognate_duplex():
+    from and_gate_pipeline.offtarget import relative_binding_hit
+    # an off-target as good as the real target competes on equal terms
+    assert abs(relative_binding_hit(-20.0, -20.0, 37.0) - 1.0) < 1e-12
+    # weaker binding is exponentially discounted, and monotonically so
+    weaker = [relative_binding_hit(-20.0 + d, -20.0, 37.0) for d in (1, 3, 6)]
+    assert weaker == sorted(weaker, reverse=True)
+    assert weaker[0] < 1.0 and weaker[-1] < 1e-3
+    # a STRONGER off-target than the target scores above 1: it wins the trigger
+    assert relative_binding_hit(-24.0, -20.0, 37.0) > 1.0
+
+
+def test_energetic_scan_finds_a_competitor_and_reports_zero_margin():
+    from and_gate_pipeline.offtarget import scan_offtargets_energetic
+    rng = random.Random(7)
+    trigger = "".join(rng.choice("ACGU") for _ in range(36))
+    filler = lambda n: "".join(rng.choice("ACGU") for _ in range(n))  # noqa: E731
+    tx = {"decoy": filler(90) + trigger + filler(90), "bg": filler(300)}
+    rep = scan_offtargets_energetic(trigger, tx, CFG, BK)
+    assert rep.status == "evaluated_unweighted"
+    assert rep.strongest.startswith("decoy:")
+    # an exact copy of the trigger binds exactly as well as the trigger does
+    assert abs(rep.margin) < 1e-6
+
+
+def test_abundance_reorders_off_targets():
+    """A perfect off-target in a silent gene cannot sequester anything."""
+    from and_gate_pipeline.offtarget import scan_offtargets_energetic
+    rng = random.Random(11)
+    trigger = "".join(rng.choice("ACGU") for _ in range(36))
+    filler = lambda n: "".join(rng.choice("ACGU") for _ in range(n))  # noqa: E731
+    tx = {"silent": filler(80) + trigger + filler(80),
+          "expressed": filler(80) + trigger[:22] + filler(94)}
+    unweighted = scan_offtargets_energetic(trigger, tx, CFG, BK)
+    assert unweighted.hits[0].transcript == "silent"
+    weighted = scan_offtargets_energetic(
+        trigger, tx, CFG, BK,
+        expression_fpkm={"silent": 0.0, "expressed": 850.0})
+    assert weighted.hits[0].transcript == "expressed"
+    assert weighted.load is not None
+
+
+def test_missing_abundance_raises_rather_than_scoring_as_harmless():
+    """Treating an unmeasured transcript as zero abundance would silently
+    remove it from the load -- the exact failure the weighting exists to stop."""
+    from and_gate_pipeline.offtarget import scan_offtargets_energetic
+    rng = random.Random(13)
+    trigger = "".join(rng.choice("ACGU") for _ in range(36))
+    filler = lambda n: "".join(rng.choice("ACGU") for _ in range(n))  # noqa: E731
+    tx = {"covered": filler(60) + trigger + filler(60)}
+    if pytest is not None:
+        with pytest.raises(ValueError):
+            scan_offtargets_energetic(trigger, tx, CFG, BK, expression_fpkm={})
+    relaxed = PipelineConfig(offtarget_require_expression=False)
+    rep = scan_offtargets_energetic(trigger, tx, relaxed, BK, expression_fpkm={})
+    assert rep.load == 0.0
+
+
+def test_trigger_is_not_its_own_off_target():
+    """The intended site must be masked, or every trigger reports itself as a
+    perfect competitor and the margin is meaningless."""
+    from and_gate_pipeline.offtarget import scan_offtargets_energetic
+    rng = random.Random(17)
+    trigger = "".join(rng.choice("ACGU") for _ in range(36))
+    gene = "AAAA" + trigger + "AAAA"
+    rep = scan_offtargets_energetic(trigger, {"own": gene}, CFG, BK,
+                                    own_locus=("own", 4, 40))
+    assert rep.status == "no_window_shared_a_seed"
+    assert rep.strongest is None
+
+
+def test_overlapping_windows_count_once_per_transcript():
+    """One transcript is one competitor.  Summing overlapping windows would
+    multiply-count the same physical molecule."""
+    from and_gate_pipeline.offtarget import scan_offtargets_energetic
+    rng = random.Random(19)
+    trigger = "".join(rng.choice("ACGU") for _ in range(36))
+    # a tandem repeat produces many overlapping high-scoring windows
+    tx = {"repeat": trigger + trigger + trigger}
+    rep = scan_offtargets_energetic(trigger, tx, CFG, BK)
+    assert len({h.transcript for h in rep.hits}) == len(rep.hits) == 1
 
 
 # ---- packaging: the stage-numbered files stay importable -------------------- #

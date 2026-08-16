@@ -103,6 +103,35 @@ class PipelineConfig:
     compensated by a bonus.  Set True to hard-filter (matching the design
     review's recommendation) once the thresholds are calibrated."""
 
+    # -- local (RNAplfold) accessibility ------------------------------------ #
+    use_local_accessibility: bool = True
+    """Measure trigger accessibility with RNAplfold (ViennaRNA ``probs_window``)
+    in addition to the global fold of the flanked window.
+
+    Folding a whole mRNA globally is not trustworthy at kilobase length: the MFE
+    structure of a 3 kb transcript is dominated by long-range pairs the ribosome
+    never sees.  RNAplfold restricts pairing to a sliding window, which is the
+    standard accessibility model (and what the NOT-gate pipeline already uses).
+
+    The measurements are recorded but do NOT yet drive the stage-2 gate --
+    changing the gate is a separate task (worst-track aggregation)."""
+
+    local_window_size: int = 240
+    """RNAplfold sliding-window width (nt).  240/200 are the values validated
+    against ``RNA.pfl_fold_up`` on the 189-trigger mCherry panel."""
+
+    local_max_bp_span: int = 200
+    """Maximum base-pair span allowed inside the RNAplfold window."""
+
+    binding_seed_len: int = 8
+    """Length of the nucleation seed scored at each trigger end.
+
+    Reported as the JOINT probability that all ``binding_seed_len`` nucleotides
+    are simultaneously unpaired -- not the mean of per-base probabilities.  A
+    toehold nucleates on a contiguous open stretch, so the joint quantity is the
+    physically relevant one; the mean is optimistic because it lets an open base
+    at one end compensate for a paired base at the other."""
+
     # ------------------------------------------------------------------ #
     # Stage 3 -- candidate selection (Pareto + diversity)                #
     # ------------------------------------------------------------------ #
@@ -232,9 +261,46 @@ class PipelineConfig:
     the two triggers complementary to each other as an unwanted side effect.
     Default False so that liability is measured, not hidden."""
 
-    # Off-target scan
+    # Off-target scan -- legacy identity scan (superseded, see below)
     offtarget_window: int | None = None      # defaults to Lx if None
     offtarget_max_identity: float = 0.85     # fraction identity that disqualifies
+
+    # Off-target scan -- energetic, expression-weighted
+    offtarget_energetic: bool = True
+    """Score off-targets by duplex free energy relative to the cognate duplex
+    instead of by fractional identity.
+
+    Measured behaviour of the identity scan above, at its defaults: the window
+    is ``Lx`` = 6 nt, and 85% of 6 nt rounds up to an exact 6/6 match, so it
+    tests a single 6-mer -- and only the FIRST one, since it probes
+    ``trigger_rc[:window]``.  For a 36-nt trigger, 30 nt are never examined.  It
+    then fires on ~8% of random 400-nt transcripts, which is a function of
+    transcript length rather than of binding.
+
+    The energetic scan uses the full trigger footprint and compares free
+    energies, so a GC-rich near-match and an AU-rich exact match are no longer
+    scored the same."""
+
+    offtarget_seed_k: int = 8
+    """k-mer seed length for the candidate-directed background index.  A hit
+    must share at least one exact k-mer with the trigger to be folded, which is
+    what keeps a transcriptome-wide scan affordable."""
+
+    offtarget_max_hits: int = 8
+    """Maximum seed-ranked windows folded per trigger.  Windows are ranked by
+    shared-k-mer votes, so this keeps the strongest candidates."""
+
+    max_off_target_load: float | None = None
+    """Optional hard gate on total expression-weighted off-target load.  None
+    == measure and report only.  Leave None until calibrated: the load is a sum
+    over the transcriptome and its scale depends on the background supplied."""
+
+    offtarget_require_expression: bool = True
+    """When an FPKM table is supplied it must cover every off-target record that
+    is scored.  A missing entry raises instead of being treated as zero
+    abundance -- silently scoring an unmeasured transcript as harmless is the
+    failure mode this flag exists to prevent.  Set False only to reproduce
+    unweighted runs."""
 
     # ------------------------------------------------------------------ #
     # Runtime                                                            #
