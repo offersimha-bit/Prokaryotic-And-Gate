@@ -359,17 +359,33 @@ def test_positive_control_uses_the_same_primitives():
         assert prim in src, f"control does not use {prim}"
 
 
-def test_and_gate_on_state_matches_the_control():
-    """The AND gate's ON state should be as good as a plain working switch --
-    the inhibitory hairpin must not cost us the ON state, only gate it."""
+def test_and_gate_on_state_cost_vs_control():
+    """What the inhibitory hairpin costs and what it buys, on the SAME trigger.
+
+    Must use one trigger for both arms: comparing the control's default trigger
+    against the demo's trigger measures the two SEQUENCES, not the two
+    ARCHITECTURES, and happens to give near-identical numbers by coincidence.
+
+    Expected, from the governing equation: Trigger B unmasks only Lx nt, so A
+    nucleates on |a|+Lx instead of the full 30 -- the ON state is genuinely
+    lower.  That is the price of the gate, not a bug.  What we assert is that
+    the price is bounded and that the suppression is real.
+    """
     from and_gate_pipeline.positive_control import build_control, score_control
     from and_gate_pipeline.kinetics import four_state
     from and_gate_pipeline.vista_switch import build
-    ctrl = score_control(build_control(CFG))
-    andg = four_state(build(_one_pair(), CFG), CFG)
+    pair = _one_pair()
+    ctrl = score_control(build_control(CFG, trigger=pair.triggerA.seq))
+    andg = four_state(build(pair, CFG), CFG)
+
+    # the gate must still reach a usable ON state
     assert andg["P_11"] > 0.5 * ctrl["P_on"], (
-        f"AND ON state {andg['P_11']:.3f} is far below the control's "
-        f"{ctrl['P_on']:.3f} -- the architecture is losing the ON state")
+        f"ON state {andg['P_11']:.3f} vs control {ctrl['P_on']:.3f} -- the "
+        f"architecture is losing too much of the ON state")
+    # and A alone must be strongly suppressed relative to the plain switch
+    assert andg["P_10"] < 0.2 * ctrl["P_on"], (
+        f"A alone fires at {andg['P_10']:.3f} vs {ctrl['P_on']:.3f} on a plain "
+        f"switch -- the inhibitory hairpin is not masking")
 
 
 # ---- four-state model / spontaneous leak ----------------------------------- #
