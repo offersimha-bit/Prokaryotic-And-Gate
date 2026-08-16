@@ -331,6 +331,44 @@ def test_kinetics_not_equilibrium():
         % r["p_fire_off"])
 
 
+# ---- positive control ------------------------------------------------------ #
+def test_positive_control_reads_open():
+    """A switch KNOWN to work must score as working.
+
+    Without this we cannot separate 'the AND gate does not open' from 'our
+    scoring code cannot recognise an open switch'.  A plain Green Series-A
+    switch, scored by the SAME primitives the AND gate uses, must read ON.
+    """
+    from and_gate_pipeline.positive_control import check
+    ok, r = check()
+    assert ok, (f"positive control failed: P_on={r['P_on']:.4f} "
+                f"P_off={r['P_off']:.6f} -- the scoring code cannot see a "
+                f"known-good switch open, so no AND-gate number is meaningful")
+
+
+def test_positive_control_uses_the_same_primitives():
+    """The control must share the code under test -- a control that runs
+    different code proves nothing about the code in use."""
+    import inspect
+    from and_gate_pipeline import positive_control as pc
+    src = inspect.getsource(pc.score_control)
+    for prim in ("opening_energy", "displacement_rate", "spontaneous_rate"):
+        assert prim in src, f"control does not use {prim}"
+
+
+def test_and_gate_on_state_matches_the_control():
+    """The AND gate's ON state should be as good as a plain working switch --
+    the inhibitory hairpin must not cost us the ON state, only gate it."""
+    from and_gate_pipeline.positive_control import build_control, score_control
+    from and_gate_pipeline.kinetics import four_state
+    from and_gate_pipeline.vista_switch import build
+    ctrl = score_control(build_control(CFG))
+    andg = four_state(build(_one_pair(), CFG), CFG)
+    assert andg["P_11"] > 0.5 * ctrl["P_on"], (
+        f"AND ON state {andg['P_11']:.3f} is far below the control's "
+        f"{ctrl['P_on']:.3f} -- the architecture is losing the ON state")
+
+
 # ---- four-state model / spontaneous leak ----------------------------------- #
 def _vista_switch():
     from and_gate_pipeline.vista_switch import build

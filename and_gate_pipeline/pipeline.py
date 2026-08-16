@@ -119,10 +119,17 @@ def _prescore(tmA: TriggerMetrics, tmB: TriggerMetrics, pair: TriggerPair) -> fl
     Kept so old runs stay reproducible.  It collapses four independent
     properties into one number and has no diversity rule, which is why stage 3
     replaced it -- see :mod:`.select`.
+
+    The ``tm.passes`` bonus that used to be added here is gone.  It awarded a
+    flat +0.2 for clearing the accessibility threshold, which meant the gate
+    neither rejected a candidate nor ranked it honestly: in the demo both
+    triggers FAILED the threshold (acc 0.45 / 0.38) and still came out on top.
+    Accessibility already enters this sum directly, and in the default Pareto
+    path it is a proper objective axis, so a poorly accessible candidate is
+    dominated rather than quietly compensated.
     """
     return (tmA.accessibility + tmB.accessibility
-            - 0.05 * pair.hamming
-            + (0.2 if tmA.passes else 0) + (0.2 if tmB.passes else 0))
+            - 0.05 * pair.hamming)
 
 
 def _shortlist(measured, cfg, backend, k, progress):
@@ -210,9 +217,16 @@ def run_pipeline(gene1: str | None = None, gene2: str | None = None,
             progress(f"  filtering skipped a pair: {ex}")
             continue
         measured.append((p, tmA, tmB))
-    progress(f"[filter] {len(measured)} pairs measured in gene context "
-             f"({sum(1 for _p, a, b in measured if a.passes and b.passes)} "
-             f"pass the accessibility gate)")
+    n_pass = sum(1 for _p, a, b in measured if a.passes and b.passes)
+    if cfg.enforce_performance_gates:
+        measured = [t for t in measured if t[1].passes and t[2].passes]
+        progress(f"[filter] {len(measured)} pairs kept (accessibility gate "
+                 f"ENFORCED; {n_pass} of the measured set passed)")
+    else:
+        progress(f"[filter] {len(measured)} pairs measured in gene context; "
+                 f"{n_pass} clear the accessibility threshold "
+                 f"(reported, not enforced -- accessibility competes as a "
+                 f"Pareto axis in stage 3)")
 
     # 4. STAGE 3 selection ------------------------------------------------ #
     shortlist = _shortlist(measured, cfg, backend, max_full_score, progress)

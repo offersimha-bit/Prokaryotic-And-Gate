@@ -92,6 +92,17 @@ class PipelineConfig:
     """Maximum normalised specified-ensemble-defect (vs. fully-open structure)
     allowed for a trigger to pass the accessibility gate."""
 
+    enforce_performance_gates: bool = False
+    """Whether ``min_accessibility`` / ``max_trigger_sed`` DISCARD a candidate.
+
+    False by default, deliberately.  These are performance thresholds, not
+    validity checks, and at this stage we want to see the whole distribution
+    rather than throw away real biology against a number we have not calibrated.
+    Accessibility is not ignored: it is a Pareto objective in stage 3, so a
+    poorly accessible candidate loses on merit instead of being silently
+    compensated by a bonus.  Set True to hard-filter (matching the design
+    review's recommendation) once the thresholds are calibrated."""
+
     # ------------------------------------------------------------------ #
     # Stage 3 -- candidate selection (Pareto + diversity)                #
     # ------------------------------------------------------------------ #
