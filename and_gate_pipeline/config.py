@@ -202,6 +202,18 @@ class PipelineConfig:
     RBS sits in the loop and is single-stranded by design, so measuring it alone
     reports a locked switch as ~80% open."""
 
+    include_trigger_opening_cost: bool = True
+    """Charge a trigger for opening its OWN structure before it can pair.
+
+    The RNAup balance has three terms -- binding + switch-opening +
+    TRIGGER-opening -- and we were scoring only the first two, which flattered
+    every candidate.  GROOT's RNAup decomposition includes it as well.
+
+    Measured on the isolated trigger, so it is a LOWER bound: in vivo the trigger
+    sits inside its transcript and the true cost is larger.  Stage 2 measures
+    that context separately (and does not yet feed it into the rate).
+    Set False to reproduce runs made before this term existed."""
+
     # Conserved TSgen2 top element (RBS + start context), from Toehold-VISTA.
     hairpin_top: str = "GUUAUAGUUAUGAACAGAGGAGACAUAACAUGAAC"
     linker_suffix: str = "AACCUGGCGGCAGCGCAAAAG"

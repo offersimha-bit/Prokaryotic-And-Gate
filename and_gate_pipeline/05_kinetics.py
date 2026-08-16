@@ -121,6 +121,49 @@ def time_to_fire_s(dG_toehold: float, kp: KineticParams) -> float:
     return float("inf") if k_obs <= 0 else 1.0 / k_obs
 
 
+def trigger_domain_span(pair, which: str, domains: str, cfg: PipelineConfig):
+    """0-based [start, end) of ``domains`` inside the trigger's own sequence.
+
+    Trigger A is  5'-[k1][a][x][r1]-3'  and Trigger B is  5'-[k2][r2]-3'
+    (the corrected order -- see 04_build_switch.py).  Needed because a trigger
+    also has to be prised open before it can pair, and that cost is paid on the
+    trigger's own coordinates, not the switch's.
+    """
+    if which == "A":
+        ta = pair.triggerA
+        off = {"k1": 0}
+        off["a"] = off["k1"] + len(ta.k1)
+        off["x"] = off["a"] + len(ta.a)
+        off["r1"] = off["x"] + len(ta.x)
+        lens = {"k1": len(ta.k1), "a": len(ta.a), "x": len(ta.x), "r1": len(ta.r1)}
+    else:
+        tb = pair.triggerB
+        off = {"k2": 0, "r2": len(tb.k2)}
+        lens = {"k2": len(tb.k2), "r2": len(tb.r2)}
+    names = [d for d in domains.split("+")]
+    start = min(off[n] for n in names)
+    end = max(off[n] + lens[n] for n in names)
+    return start, end
+
+
+def _trigger_opening(b, trigger_seq: str, span, cfg: PipelineConfig) -> float:
+    """Cost of freeing the trigger's own binding domains from its self-structure.
+
+    A structured trigger must pay to open before it can pair, exactly as the
+    switch does.  This is the third term of the RNAup decomposition
+    (total = binding + switch-opening + TRIGGER-opening) and GROOT scores it too;
+    we were omitting it, which flattered every candidate.
+
+    Measured on the isolated trigger, so it is a LOWER bound: in vivo the
+    trigger is embedded in its transcript and the real cost is higher.  Stage 2
+    measures that context separately.
+    """
+    if not cfg.include_trigger_opening_cost:
+        return 0.0
+    s, e = span
+    return b.opening_energy(trigger_seq, list(range(s, e)))
+
+
 def toehold_dG(sw, cfg: PipelineConfig, state: str = "off") -> float:
     """Accessibility-corrected energy of the toehold Trigger A can nucleate on.
 
@@ -128,6 +171,9 @@ def toehold_dG(sw, cfg: PipelineConfig, state: str = "off") -> float:
     state='afterB': Trigger B has invaded k2*, so x* is released too -- scored
                     with B's own footprint held open (that is what B binding
                     means), not by assuming the result.
+
+    Includes the trigger's OWN opening cost, so this is the full RNAup-style
+    balance rather than binding-minus-switch-opening alone.
     """
     b = get_backend(cfg)
     s = sw.spans
@@ -136,15 +182,34 @@ def toehold_dG(sw, cfg: PipelineConfig, state: str = "off") -> float:
         site = list(range(*s["a_star_gap"]))
         trig = ta.a
         opening = b.opening_energy(sw.core, site)
+        tspan = trigger_domain_span(sw.pair, "A", "a", cfg)
     elif state == "afterB":
         site = list(range(s["xstar"][0], s["a_star_gap"][1]))
         trig = ta.x + ta.a
         given = list(range(s["r2star"][0], s["k2star"][1]))   # B bound here
         opening = b.opening_energy_conditioned(sw.core, site, given)
+        tspan = trigger_domain_span(sw.pair, "A", "a+x", cfg)
     else:
         raise ValueError(state)
     duplex = b.binding_dG(trig, sw.core[site[0]:site[-1] + 1])
-    return duplex + opening
+    return duplex + opening + _trigger_opening(b, ta.seq, tspan, cfg)
+
+
+def triggerB_dG(sw, cfg: PipelineConfig) -> float:
+    """Accessibility-corrected energy of Trigger B's own toehold, ``r2*``.
+
+    The gate is a PRODUCT of two kinetic events and we were modelling only the
+    second.  B has to find and open r2* before it can invade k2*, and r2* is not
+    guaranteed to be accessible just because we put it at the 5' end.
+    """
+    b = get_backend(cfg)
+    s = sw.spans
+    tb = sw.pair.triggerB
+    site = list(range(*s["r2star"]))
+    duplex = b.binding_dG(tb.r2, sw.core[site[0]:site[-1] + 1])
+    opening = b.opening_energy(sw.core, site)
+    tspan = trigger_domain_span(sw.pair, "B", "r2", cfg)
+    return duplex + opening + _trigger_opening(b, tb.seq, tspan, cfg)
 
 
 def ribosome_footprint(sw, cfg: PipelineConfig) -> list:
@@ -202,12 +267,25 @@ def four_state(sw, cfg: PipelineConfig | None = None,
     """Full truth table.  Rates add, so the baseline is contained in every
     state by construction and nothing is ever subtracted.
 
+    The gate is a PRODUCT of two kinetic events, so Trigger B binding is a
+    PROBABILITY, not an assumption.  ``f_B`` is the fraction of transcripts that
+    have B bound before they decay; the states where B is present are a mixture
+    of the B-bound and still-OFF configurations weighted by it::
+
         k_00 = k_spont(OFF)
-        k_10 = k_spont(OFF)      + k_A(toehold = a*)          A alone, 4-nt grip
-        k_01 = k_spont(B bound)                               B alone CANNOT fire:
-                                                              it opens the inhibitory
-                                                              hairpin, not the RBS one
-        k_11 = k_spont(B bound)  + k_A(toehold = x*+a*)       both -> full 30-nt toehold
+        k_10 = k_spont(OFF) + k_A(a*)                        A alone, |a|-nt grip
+
+        k_01 =    f_B  * k_spont(B bound)
+             + (1-f_B) * k_spont(OFF)                        B alone never fires:
+                                                             it opens the inhibitory
+                                                             hairpin, not the RBS one
+        k_11 =    f_B  * [k_spont(B bound) + k_A(x*+a*)]
+             + (1-f_B) * [k_spont(OFF)     + k_A(a*)]        B did not arrive in
+                                                             time -> A is back to
+                                                             the |a|-nt toehold
+
+    As f_B -> 1 this collapses to the old model, so nothing changes for a design
+    whose B arm is fast; what it exposes is a design whose B arm is NOT.
     """
     cfg = cfg or sw.cfg
     kp = kp or KineticParams()
@@ -215,25 +293,33 @@ def four_state(sw, cfg: PipelineConfig | None = None,
 
     dg_off = toehold_dG(sw, cfg, "off")
     dg_onB = toehold_dG(sw, cfg, "afterB")
-    cA = kp.conc("A")
+    dg_B = triggerB_dG(sw, cfg)
+    cA, cB = kp.conc("A"), kp.conc("B")
 
     k_spont_off = spontaneous_rate(sw, cfg, kp, trigger_B_bound=False)
     k_spont_B = spontaneous_rate(sw, cfg, kp, trigger_B_bound=True)
     k_A_off = displacement_rate(dg_off, kp) * cA
     k_A_onB = displacement_rate(dg_onB, kp) * cA
+    k_B = displacement_rate(dg_B, kp) * cB
+
+    # fraction of transcripts with Trigger B bound before decay
+    f_B = _p_from_rate(k_B, kp)
 
     k = {"00": k_spont_off,
          "10": k_spont_off + k_A_off,
-         "01": k_spont_B,
-         "11": k_spont_B + k_A_onB}
+         "01": f_B * k_spont_B + (1 - f_B) * k_spont_off,
+         "11": f_B * (k_spont_B + k_A_onB) + (1 - f_B) * (k_spont_off + k_A_off)}
     P = {s: _p_from_rate(v, kp) for s, v in k.items()}
 
     off_states = ("00", "10", "01")
     logic_margin = P["11"] / max(max(P[s] for s in off_states), 1e-30)
     return {
         "dG_toehold_off": dg_off, "dG_toehold_afterB": dg_onB,
+        "dG_toehold_B": dg_B,
         "k_spont_off": k_spont_off, "k_spont_afterB": k_spont_B,
         "k_A_off": k_A_off, "k_A_afterB": k_A_onB,
+        "k_B": k_B, "f_B": f_B,
+        "t_fire_B_s": (float("inf") if k_B <= 0 else 1.0 / k_B),
         "k": k, "P": P,
         "P_00": P["00"], "P_10": P["10"], "P_01": P["01"], "P_11": P["11"],
         "on_off": P["11"] / max(P["00"], 1e-30),
