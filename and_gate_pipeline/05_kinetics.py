@@ -311,8 +311,13 @@ def four_state(sw, cfg: PipelineConfig | None = None,
          "11": f_B * (k_spont_B + k_A_onB) + (1 - f_B) * (k_spont_off + k_A_off)}
     P = {s: _p_from_rate(v, kp) for s, v in k.items()}
 
+    # Ratios are taken against a FLOORED denominator: we model one leak
+    # mechanism, a real construct has several, and without the floor P_00 falls
+    # to ~1e-14 and the ratio reports the omission rather than the design.
+    floor = getattr(cfg, "leak_floor", 1e-3)
     off_states = ("00", "10", "01")
-    logic_margin = P["11"] / max(max(P[s] for s in off_states), 1e-30)
+    worst_off = max(P[s] for s in off_states)
+    logic_margin = P["11"] / max(worst_off, floor)
     return {
         "dG_toehold_off": dg_off, "dG_toehold_afterB": dg_onB,
         "dG_toehold_B": dg_B,
@@ -322,9 +327,11 @@ def four_state(sw, cfg: PipelineConfig | None = None,
         "t_fire_B_s": (float("inf") if k_B <= 0 else 1.0 / k_B),
         "k": k, "P": P,
         "P_00": P["00"], "P_10": P["10"], "P_01": P["01"], "P_11": P["11"],
-        "on_off": P["11"] / max(P["00"], 1e-30),
+        "on_off": P["11"] / max(P["00"], floor),
         "logic_margin": logic_margin,
-        "worst_single_input": P["11"] / max(P["10"], P["01"], 1e-30),
+        "worst_single_input": P["11"] / max(P["10"], P["01"], floor),
+        "worst_off_state": worst_off,
+        "leak_floor_active": worst_off < floor,
         "half_life_s": kp.mrna_half_life_s,
     }
 

@@ -60,6 +60,8 @@ _MODULES: list[tuple[str, str]] = [
     ("05_scoring_legacy.py",     "scoring"),
     # -- stage 6: output ------------------------------------------------ #
     ("06_visualize.py",          "visualize"),
+    # -- stage 7: rank -------------------------------------------------- #
+    ("07_rank.py",               "rank"),
     # -- orchestration and analysis tools ------------------------------- #
     ("pipeline.py",              "pipeline"),
     ("05_truth_table.py",        "truth_table"),

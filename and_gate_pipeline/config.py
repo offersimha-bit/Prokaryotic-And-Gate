@@ -353,6 +353,32 @@ class PipelineConfig:
     magnesium: float = 0.0
     material: str = "rna"
     ensemble: str = "stacking"
+    leak_floor: float = 1e-3
+    """Minimum OFF-state firing probability used in any ratio [0-1].
+
+    Not a numerical epsilon -- a statement about the model's SCOPE.  We model one
+    leak mechanism (spontaneous breathing of the hairpin).  A real construct also
+    leaks through transcriptional read-through, alternative start codons,
+    standby-site initiation and copy-number noise, none of which are here.  With
+    only the modelled term, P_00 reaches ~1e-14 and ON/OFF comes out ~1e11 --
+    a number no published toehold switch approaches (the best are a few hundred
+    fold), so it describes the omission, not the design.
+
+    Flooring the denominator at 1e-3 caps any ratio near 1000x, which stays above
+    the measured range and stops one unmodelled quantity from dominating the
+    ranking.  Raise it if a calibration run says real leak is higher."""
+
+    rank_axes: tuple = ("P_11", "logic_margin")
+    """The Pareto objectives, both maximised.
+
+    ``P_11``         absolute ON-state output -- expression strength
+    ``logic_margin`` selectivity, ON over the worst OFF state
+
+    Deliberately not (on_off, logic_margin): those share a numerator and nearly
+    the same denominator, so the front collapses towards a line.  Output and
+    selectivity are the two things that genuinely trade off, and they are what a
+    user would want to prioritise between."""
+
     use_legacy_scoring: bool = False
     """Score with the old hand-weighted DesignScorer (05_scoring_legacy.py)
     instead of the kinetic model.

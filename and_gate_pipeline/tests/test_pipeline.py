@@ -356,6 +356,48 @@ def test_kinetics_not_equilibrium():
         % r["p_fire_off"])
 
 
+# ---- stage 7: Pareto ranking ----------------------------------------------- #
+def test_pareto_fronts_identify_the_non_dominated_set():
+    from and_gate_pipeline.rank import pareto_fronts
+    pts = [(0.9, 10.0), (0.5, 100.0), (0.7, 50.0), (0.2, 5.0),
+           (0.9, 9.0), (0.95, 2.0)]
+    f = pareto_fronts(pts)
+    assert f[0] == 0 and f[1] == 0 and f[2] == 0 and f[5] == 0
+    assert f[4] == 1                      # (0.9, 9) is beaten by (0.9, 10)
+    assert f[3] > f[4]                    # (0.2, 5) is beaten by more
+    assert len(f) == len(pts)
+
+
+def test_pareto_is_scale_invariant():
+    """Domination cannot depend on units, so rescaling an axis must not move
+    any design between fronts."""
+    from and_gate_pipeline.rank import pareto_fronts
+    pts = [(0.9, 10.0), (0.5, 100.0), (0.7, 50.0), (0.9, 9.0)]
+    scaled = [(x, y * 1000.0) for x, y in pts]
+    assert pareto_fronts(pts) == pareto_fronts(scaled)
+
+
+def test_preference_picks_opposite_ends_of_the_front():
+    from and_gate_pipeline.rank import pareto_fronts, pick
+    pts = [(0.95, 2.0), (0.5, 100.0), (0.7, 50.0)]
+    f = pareto_fronts(pts)
+    assert pick(pts, f, 1.0) == 0         # maximise output
+    assert pick(pts, f, 0.0) == 1         # maximise selectivity
+
+
+def test_leak_floor_caps_meaningless_ratios():
+    """Without a floor the modelled OFF state reaches ~1e-14 and ON/OFF comes
+    out ~1e11 -- a statement about what the model omits, not about the design."""
+    from and_gate_pipeline.kinetics import four_state
+    from and_gate_pipeline.vista_switch import build
+    sw = build(_best_pair(), CFG)
+    r = four_state(sw, CFG)
+    assert r["logic_margin"] <= r["P_11"] / CFG.leak_floor + 1e-6
+    assert r["on_off"] <= 1.0 / CFG.leak_floor + 1e-6
+    unfloored = PipelineConfig(leak_floor=1e-30)
+    assert four_state(sw, unfloored)["logic_margin"] > r["logic_margin"]
+
+
 # ---- positive control ------------------------------------------------------ #
 def test_positive_control_reads_open():
     """A switch KNOWN to work must score as working.

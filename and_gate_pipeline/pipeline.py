@@ -34,6 +34,7 @@ from .constraints import validate_config, IntegrityReport
 from .filtering import evaluate_pair_triggers, TriggerMetrics
 from .kinetics import KineticParams, four_state
 from .optimize import optimize_switch
+from .rank import rank_designs
 from .scoring import DesignScorer, ScoreCard
 from .vista_switch import build
 from .select import evaluate_quality, select
@@ -115,11 +116,14 @@ class DesignResult:
     tmB: TriggerMetrics
     score: ScoreCard
     rank: int = 0
+    front: int = 0
+    is_knee: bool = False
 
     def row(self) -> dict:
         p = self.pair
         base = {
-            "rank": self.rank,
+            "rank": self.rank, "pareto_front": self.front,
+            "is_knee": self.is_knee,
             "orientation": p.orientation,
             "gene_A": p.gene_a, "gene_B": p.gene_b,
             "x": p.triggerA.x, "k2": p.triggerB.k2,
@@ -218,6 +222,7 @@ def run_pipeline(gene1: str | None = None, gene2: str | None = None,
                  pairs: list | None = None,
                  viz_genes: dict | None = None,
                  kinetic_params=None,
+                 rank_preference: float | None = None,
                  progress=print) -> PipelineOutput:
     """Design AND-gate switches from two genes.
 
@@ -319,14 +324,23 @@ def run_pipeline(gene1: str | None = None, gene2: str | None = None,
             continue
         results.append(DesignResult(pair=p, switch=sw, tmA=tmA, tmB=tmB, score=sc))
 
-    results.sort(key=lambda r: -r.score.total)
-    for i, r in enumerate(results, 1):
-        r.rank = i
+    progress(f"[score] {len(results)} designs scored "
+             f"({'legacy weights' if legacy_scorer else 'kinetic'})")
+
+    # 7. STAGE 7 ranking --------------------------------------------------- #
+    if results:
+        rk = rank_designs(results, cfg, preference=rank_preference)
+        ordered = [results[i] for i in rk.order]
+        for pos, i in enumerate(rk.order):
+            results[i].rank = pos + 1
+            results[i].front = rk.fronts[i]
+            results[i].is_knee = (i == rk.knee)
+        results = ordered
+        progress(f"[rank] Pareto over {rk.axes}: fronts {rk.front_sizes()}")
+        for n in rk.notes:
+            progress(f"       note: {n}")
     out.results = results
     out.n_scored = len(results)
-    progress(f"[score] {len(results)} designs scored "
-             f"({'legacy weights' if legacy_scorer else 'kinetic'}); "
-             f"top = {results[0].score.total:.4g}" if results else "no designs")
 
     # 7. outputs ---------------------------------------------------------- #
     if out_dir:
