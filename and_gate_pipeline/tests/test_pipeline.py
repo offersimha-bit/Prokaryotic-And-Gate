@@ -330,6 +330,57 @@ def test_kinetics_not_equilibrium():
         % r["p_fire_off"])
 
 
+# ---- four-state model / spontaneous leak ----------------------------------- #
+def _vista_switch():
+    from and_gate_pipeline.vista_switch import build
+    return build(_one_pair(), CFG)
+
+
+def test_rbs_and_start_codon_are_located():
+    sw = _vista_switch()
+    assert "rbs" in sw.spans and "start_codon" in sw.spans
+    assert sw.seq_of("rbs") == su.to_rna(CFG.rbs_seq)
+    assert sw.seq_of("start_codon") == "AUG"
+
+
+def test_leak_uses_the_footprint_not_the_rbs_alone():
+    """Regression: the RBS sits in the loop and is unpaired BY DESIGN, so
+    scoring its accessibility alone reports a locked switch as ~80% open and
+    gives P_00 ~ 97%. The leak must use the whole ribosome footprint."""
+    from and_gate_pipeline.kinetics import (four_state, spontaneous_rate,
+                                            ribosome_footprint, KineticParams)
+    from and_gate_pipeline.thermo import get_backend
+    sw = _vista_switch()
+    fp = ribosome_footprint(sw, CFG)
+    assert len(fp) > len(su.to_rna(CFG.rbs_seq)) + 3   # more than RBS+AUG
+    b = get_backend(CFG)
+    rbs_only = b.region_accessibility(sw.core, list(range(*sw.spans["rbs"])))
+    k_spont = spontaneous_rate(sw, CFG, KineticParams())
+    assert rbs_only > 0.5, "sanity: the RBS really is open in the loop"
+    assert four_state(sw, CFG)["P_00"] < 0.05, "OFF state must not leak"
+
+
+def test_four_state_truth_table():
+    from and_gate_pipeline.kinetics import four_state
+    r = four_state(_vista_switch(), CFG)
+    P = r["P"]
+    assert P["11"] > P["10"] and P["11"] > P["01"] and P["11"] > P["00"]
+    assert P["01"] <= P["10"] + 1e-9, (
+        "Trigger B alone opens the inhibitory hairpin, not the RBS one, so it "
+        "must not fire more than Trigger A alone")
+    assert r["logic_margin"] > 1.0
+    for v in P.values():
+        assert 0.0 <= v <= 1.0
+
+
+def test_rates_add_no_subtraction():
+    """k_10 must contain the baseline by construction, never by subtraction."""
+    from and_gate_pipeline.kinetics import four_state
+    r = four_state(_vista_switch(), CFG)
+    assert r["k"]["10"] >= r["k"]["00"]
+    assert abs(r["k"]["10"] - (r["k_spont_off"] + r["k_A_off"])) < 1e-12
+
+
 # ---- cross-trigger crosstalk utilities ------------------------------------- #
 def test_crosstalk_utilities():
     assert su.max_identity_match("ACGUACGU", "UUACGUUU") == 5   # "ACGU"+ -> ACGUU

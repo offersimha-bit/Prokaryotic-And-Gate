@@ -87,6 +87,21 @@ class KineticParams:
     """Free trigger concentration.  Should come from DE data per gene; 10 nM is
     a placeholder for a moderately expressed transcript."""
 
+    conc_A_M: float | None = None
+    conc_B_M: float | None = None
+    """Per-trigger concentrations.  Fall back to ``trigger_conc_M`` when None.
+    Set these from DE data — abundance belongs INSIDE the model, not as an
+    external multiplier (that would count it twice)."""
+
+    k_ribosome: float = 0.1
+    """Ribosome loading rate onto a fully accessible RBS [1/s].  With the
+    equilibrium accessibility of the RBS this gives the spontaneous (leak)
+    firing rate.  Calibrate jointly with k_bm — see the module note."""
+
+    def conc(self, which: str) -> float:
+        v = self.conc_A_M if which == "A" else self.conc_B_M
+        return self.trigger_conc_M if v is None else v
+
 
 def displacement_rate(dG_toehold: float, kp: KineticParams) -> float:
     """k_eff [1/M/s] for a toehold of accessibility-corrected energy dG."""
@@ -132,9 +147,105 @@ def toehold_dG(sw, cfg: PipelineConfig, state: str = "off") -> float:
     return duplex + opening
 
 
+def ribosome_footprint(sw, cfg: PipelineConfig) -> list:
+    """The stretch a 30S initiation complex must occupy: RBS through AUG+15.
+
+    NOT just the RBS.  In a toehold switch the RBS sits in the loop and is
+    single-stranded BY DESIGN -- measuring its accessibility alone reports the
+    switch as ~80% open even when it is locked.  What keeps the OFF state off is
+    that the hairpin prevents the ribosome from ACCOMMODATING: it needs a
+    contiguous unstructured window spanning the RBS, the spacer and the start
+    codon.  So the quantity that matters is whether that whole window can be
+    simultaneously unpaired.
+    """
+    if "rbs" not in sw.spans or "start_codon" not in sw.spans:
+        return []
+    lo = sw.spans["rbs"][0]
+    hi = min(len(sw.core), sw.spans["start_codon"][1] + cfg.ribosome_footprint_3p)
+    return list(range(lo, hi))
+
+
+def spontaneous_rate(sw, cfg: PipelineConfig, kp: KineticParams,
+                     trigger_B_bound: bool = False) -> float:
+    """Leak: the switch fires with no trigger driving it [1/s].
+
+        k_spont = P(entire ribosome footprint simultaneously unpaired) x k_ribosome
+        P(open) = exp(-dG_opening / RT)
+
+    Equilibrium is the RIGHT approximation here, even though it fails for the
+    trigger path.  Stem breathing is µs-ms; ribosome arrival is seconds, so the
+    structure re-equilibrates thousands of times before one ribosome shows up
+    and the ribosome samples the equilibrium ensemble.  In the trigger path the
+    two timescales are comparable, which is exactly why equilibrium fails there.
+    """
+    b = get_backend(cfg)
+    idx = ribosome_footprint(sw, cfg)
+    if not idx:
+        return 0.0
+    if trigger_B_bound:
+        s = sw.spans
+        given = list(range(s["r2star"][0], s["k2star"][1]))
+        dg_open = b.opening_energy_conditioned(sw.core, idx, given)
+    else:
+        dg_open = b.opening_energy(sw.core, idx)
+    p_open = math.exp(-max(0.0, dg_open) / _RT)
+    return p_open * kp.k_ribosome
+
+
+def _p_from_rate(k_obs: float, kp: KineticParams) -> float:
+    k_deg = math.log(2.0) / kp.mrna_half_life_s
+    return k_obs / (k_obs + k_deg)
+
+
+def four_state(sw, cfg: PipelineConfig | None = None,
+               kp: KineticParams | None = None) -> dict:
+    """Full truth table.  Rates add, so the baseline is contained in every
+    state by construction and nothing is ever subtracted.
+
+        k_00 = k_spont(OFF)
+        k_10 = k_spont(OFF)      + k_A(toehold = a*)          A alone, 4-nt grip
+        k_01 = k_spont(B bound)                               B alone CANNOT fire:
+                                                              it opens the inhibitory
+                                                              hairpin, not the RBS one
+        k_11 = k_spont(B bound)  + k_A(toehold = x*+a*)       both -> full 30-nt toehold
+    """
+    cfg = cfg or sw.cfg
+    kp = kp or KineticParams()
+    b = get_backend(cfg)
+
+    dg_off = toehold_dG(sw, cfg, "off")
+    dg_onB = toehold_dG(sw, cfg, "afterB")
+    cA = kp.conc("A")
+
+    k_spont_off = spontaneous_rate(sw, cfg, kp, trigger_B_bound=False)
+    k_spont_B = spontaneous_rate(sw, cfg, kp, trigger_B_bound=True)
+    k_A_off = displacement_rate(dg_off, kp) * cA
+    k_A_onB = displacement_rate(dg_onB, kp) * cA
+
+    k = {"00": k_spont_off,
+         "10": k_spont_off + k_A_off,
+         "01": k_spont_B,
+         "11": k_spont_B + k_A_onB}
+    P = {s: _p_from_rate(v, kp) for s, v in k.items()}
+
+    off_states = ("00", "10", "01")
+    logic_margin = P["11"] / max(max(P[s] for s in off_states), 1e-30)
+    return {
+        "dG_toehold_off": dg_off, "dG_toehold_afterB": dg_onB,
+        "k_spont_off": k_spont_off, "k_spont_afterB": k_spont_B,
+        "k_A_off": k_A_off, "k_A_afterB": k_A_onB,
+        "k": k, "P": P,
+        "P_00": P["00"], "P_10": P["10"], "P_01": P["01"], "P_11": P["11"],
+        "on_off": P["11"] / max(P["00"], 1e-30),
+        "logic_margin": logic_margin,
+        "worst_single_input": P["11"] / max(P["10"], P["01"], 1e-30),
+        "half_life_s": kp.mrna_half_life_s,
+    }
+
+
 def and_behaviour(sw, cfg: PipelineConfig | None = None,
                   kp: KineticParams | None = None) -> dict:
-    """P_fire without and with Trigger B, and the AND ratio."""
+    """Backwards-compatible two-state view (OFF vs. after B) used by sweep.py."""
     cfg = cfg or sw.cfg
     kp = kp or KineticParams()
     dg_off = toehold_dG(sw, cfg, "off")
@@ -150,6 +261,16 @@ def and_behaviour(sw, cfg: PipelineConfig | None = None,
         "and_ratio": p_on / max(p_off, 1e-30),
         "half_life_s": kp.mrna_half_life_s,
     }
+
+
+def specificity(sw, cfg: PipelineConfig, kp_disease: KineticParams,
+                kp_healthy: KineticParams) -> dict:
+    """Same model, two cell states.  Only possible because abundance lives
+    inside the kinetic model rather than being applied as an outside weight."""
+    d = four_state(sw, cfg, kp_disease)
+    h = four_state(sw, cfg, kp_healthy)
+    return {"P_disease": d["P_11"], "P_healthy": h["P_11"],
+            "specificity": d["P_11"] / max(h["P_11"], 1e-30)}
 
 
 def report(sw, cfg: PipelineConfig | None = None, kp: KineticParams | None = None):

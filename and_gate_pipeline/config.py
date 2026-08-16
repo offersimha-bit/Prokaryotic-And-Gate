@@ -93,6 +93,13 @@ class PipelineConfig:
     rbs_seq: str = "AGAGGAGA"
     """Shine-Dalgarno / RBS presented in the primary loop."""
 
+    ribosome_footprint_3p: int = 15
+    """How far past the start codon the 30S initiation complex must find
+    unstructured RNA.  The leak rate uses P(RBS -> AUG+this is simultaneously
+    unpaired), NOT the accessibility of the RBS alone: in a toehold switch the
+    RBS sits in the loop and is single-stranded by design, so measuring it alone
+    reports a locked switch as ~80% open."""
+
     # Conserved TSgen2 top element (RBS + start context), from Toehold-VISTA.
     hairpin_top: str = "GUUAUAGUUAUGAACAGAGGAGACAUAACAUGAAC"
     linker_suffix: str = "AACCUGGCGGCAGCGCAAAAG"

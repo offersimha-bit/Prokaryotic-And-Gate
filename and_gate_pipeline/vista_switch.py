@@ -142,5 +142,16 @@ def build(pair: TriggerPair, cfg: PipelineConfig, reporter: str = "") -> VistaAn
     # what the inhibitory hairpin masks
     spans["masked_toehold"] = (t0, t0 + lr1 + cfg.Lx)
 
+    # RBS and start codon, located inside the conserved element rather than
+    # hard-coded, so they follow cfg.hairpin_top if it is ever changed.
+    top_seq = su.to_rna(cfg.hairpin_top)
+    tp0 = spans["top"][0]
+    rbs_off = top_seq.find(su.to_rna(cfg.rbs_seq))
+    if rbs_off >= 0:
+        spans["rbs"] = (tp0 + rbs_off, tp0 + rbs_off + len(cfg.rbs_seq))
+    aug_off = top_seq.rfind("AUG")          # the start codon is the LAST AUG
+    if aug_off >= 0:
+        spans["start_codon"] = (tp0 + aug_off, tp0 + aug_off + 3)
+
     return VistaAndSwitch(pair=pair, cfg=cfg, core=core, spans=spans,
                           primary_only=primary, reporter=su.to_rna(reporter))
