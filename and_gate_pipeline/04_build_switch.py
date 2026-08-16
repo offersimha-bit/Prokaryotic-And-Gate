@@ -21,11 +21,17 @@ Our contribution is only the Kim 2019 inhibitory hairpin, prepended:
 
 OFF : the inhibitory hairpin pairs (k2*+r1) with (r1*+x*), so only a* (4 nt) of
       Trigger A's 30-nt toehold is exposed -- too short to fire.  Kim's a=4.
-+B  : B binds the r2* toehold and invades k2*, opening the hairpin and
-      releasing r1*+x* -> Trigger A now sees its full 30-nt toehold.
-+A+B: Trigger A binds the full toehold and k1 invades the 6-bp stem base ->
-      the RBS/AUG hairpin opens.  This is a plain TSgen2 switch at that point,
-      which is why VISTA's trained model applies to it in-domain.
++B  : B binds the r2* toehold and invades k2*, which displaces the k2*:x*
+      helix and releases x* -- and ONLY x*.  B has no complementarity to
+      r1_switch, so the r1*:r1_switch helix stays closed.  Trigger A's
+      NUCLEATION toehold therefore grows from |a| to |a|+Lx, never to the full
+      30 nt.  This ceiling was measured, not assumed.
++A+B: Trigger A nucleates on x*+a* (|a|+Lx nt) and then branch-migrates through
+      r1*, displacing the switch's own r1 copy, so the final duplex does cover
+      all 30 nt -- but the RATE is set by the nucleation toehold, not by the
+      final duplex size.  k1 then invades the 6-bp stem base and the RBS/AUG
+      hairpin opens.  From that point it is a plain TSgen2 switch, which is why
+      VISTA's trained model applies to it in-domain.
 """
 
 from __future__ import annotations
