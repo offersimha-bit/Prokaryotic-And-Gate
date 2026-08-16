@@ -56,6 +56,24 @@ class PipelineConfig:
     """Reject a G1/G2 segment pair whose minimum Hamming distance exceeds this
     fraction of Lx.  Perfect reverse complements score 0."""
 
+    # --- stage-1 window filters (ported from the trigger-selection script,
+    #     with the defaults deliberately changed) ------------------------ #
+    scan_max_gc: float = 0.0
+    """Maximum GC fraction of a candidate trigger window (0 == disabled).
+
+    Off by default: a GC-rich window is a soft liability that stage 2 already
+    measures as poor accessibility, so hard-rejecting it discards real biology
+    before it has been weighed."""
+
+    scan_forbid_motifs: bool = False
+    """Apply ``forbidden_runs`` / ``forbidden_motifs`` to the *trigger* windows.
+
+    The standalone scanner did this by default, which is wrong for this project:
+    Type IIS sites (BsaI / BsmBI / SapI / BbsI) are Golden Gate constructability
+    hazards, and the trigger is a natural sequence that is never synthesised --
+    only the switch is cloned.  Leave False; the same motifs are still enforced
+    on the switch in stage 4.  Set True only to reproduce old scanner runs."""
+
     # ------------------------------------------------------------------ #
     # Stage 2 -- thermodynamic filtering / accessibility                 #
     # ------------------------------------------------------------------ #
@@ -75,7 +93,20 @@ class PipelineConfig:
     allowed for a trigger to pass the accessibility gate."""
 
     # ------------------------------------------------------------------ #
-    # Stage 3 -- toehold-switch architecture                             #
+    # Stage 3 -- candidate selection (Pareto + diversity)                #
+    # ------------------------------------------------------------------ #
+    select_max_overlap: float = 0.5
+    """Two shortlisted candidates from the same gene pair may not overlap by
+    more than this fraction on BOTH triggers.  Without it, the shortlist fills
+    with the same site shifted by a nucleotide -- the failure mode the old
+    ``top_k = 8`` had.  0.5 matches the NOT-gate pipeline's own rule."""
+
+    select_use_pareto: bool = True
+    """Shortlist by Pareto front over the stage-3 criteria instead of by a
+    single scalar.  Set False to fall back to the legacy ``_prescore`` scalar."""
+
+    # ------------------------------------------------------------------ #
+    # Stage 4 -- toehold-switch architecture                             #
     # ------------------------------------------------------------------ #
     primary_stem_len: int = 18
     """Primary (downstream) stem length -- Green 2026 Series A."""

@@ -33,7 +33,8 @@ Then create an environment and install the pinned dependencies:
 python -m venv .venv && source .venv/bin/activate      # Linux/WSL
 python -m pip install -r and_gate_pipeline/requirements.txt
 python -m and_gate_pipeline --demo --out results       # verify
-python -m and_gate_pipeline.tests.test_pipeline        # 14/14 should pass
+python -m and_gate_pipeline map                        # stage <-> file <-> alias
+python -m and_gate_pipeline.tests.test_pipeline        # 40/40 should pass
 ```
 
 NUPACK is optional and must be installed separately (see below); without it the
@@ -106,50 +107,66 @@ Outputs in `results/`:
 * `viz/*_arcs.png`, `viz/*_pair_fraction.csv` — arc diagrams of the target genes
   and the top switches (VISTA `pair_fraction.csv` layout)
 
-## Pooled multi-gene discovery (`interop.py`)
+## Pooled multi-gene discovery (now part of STAGE 1)
 
-The standalone scanner at `Triger finding/and_gate_trigger.py` does something
-this pipeline doesn't: it pools **many** gene records and hunts for the
-coincidence where one gene's connector `x` is the exact reverse complement of
-another gene's `k2`. This pipeline takes only two genes but builds the real
-switch. `interop.py` chains them — **pooled discovery → full design** — without
-editing the scanner:
+The standalone scanner at `Triger finding/and_gate_trigger.py` used to be the
+only way to pool many gene records and hunt for the coincidence where one gene's
+connector `x` is the exact reverse complement of another gene's `k2`. That
+capability now lives inside `01_target_scan.py`, and `interop.py` is gone.
 
 ```python
-from and_gate_pipeline.interop import load_scanner, load_genes, run_from_scanner, config_from_params
+from and_gate_pipeline import PipelineConfig
+from and_gate_pipeline.target_scan import scan_from_fasta
+from and_gate_pipeline.pipeline import run_pipeline
 
-mod   = load_scanner()                       # imported unmodified; its main() never runs
-cfg   = config_from_params(mod.Params())     # Lx=6, r1=11, a=4, k1=15, r2=30
-genes = load_genes(["genes/amr.fasta"])      # any number of FASTA files, pooled
-out   = run_from_scanner(genes, cfg=cfg, out_dir="results")
-
-best = out.results[0]
-print(best.score.quality_percent, best.switch.core)
-print(best.pair.meta["gene_a_name"], best.pair.meta["gene_b_name"])
+cfg   = PipelineConfig()
+pairs = scan_from_fasta("genes/", cfg)          # any number of FASTA files
+out   = run_pipeline(cfg=cfg, pairs=pairs, out_dir="results")
 ```
 
-> **Why this is safe to run on NUPACK.** The scanner's own `select_backend()`
-> tries NUPACK first, and its NUPACK `unpaired_probs()` assumes an
-> `(n+1)×(n+1)` pair matrix with an unpaired column — but NUPACK 4.1 returns
-> `n×n` with P(unpaired) on the **diagonal**. The lookup raises `IndexError`,
-> which the scanner swallows (`except Exception: return [0.5]*n`), silently
-> reporting **every base as 50 % unpaired** — which also scrambles its
-> accessibility-ordered top-k pre-selection. `interop` never calls
-> `select_backend()`: it injects `_ScannerBackendShim`, wrapping this pipeline's
-> verified engine, into the scanner's `scan_trigger1`/`scan_trigger2` (which
-> take `backend` as an argument). Covered by
-> `test_interop_shim_is_not_the_broken_backend`.
->
-> ⚠️ Running `python and_gate_trigger.py` **standalone** still hits the bug.
-> Until it's fixed upstream, set `backend: str = "vienna"` in its `Params`.
+### Why the bridge was removed rather than fixed
 
-Ported from that scanner into this pipeline's scoring (Section 7D):
-**cross-trigger crosstalk** (`crosstalk_stick_nt` / `crosstalk_subst_nt` — do the
-two triggers hybridise to or mimic each other beyond the intended connector,
-with the connector masked out), **Type IIS sites** (BsaI/BsmBI/SapI/BbsI —
-Golden Gate hazards), and an **absolute 0–100 `quality_percent`** with a
-per-criterion `breakdown()`, measured against fixed reference scales so it stays
-comparable across runs.
+`interop.windows_to_pair()` handed the scanner's slices straight into
+`TriggerA`. The scanner cut its window in genomic order `r1 | x | a | k1`, while
+`TriggerA.seq` reassembles `k1 + a + x + r1` — the order the switch requires.
+The result was a "trigger" that **does not occur in the gene**, at a `pos_x`
+that made stage 2 fold a different window than the one selected:
+
+```
+scanner window (contiguous in gene): GUGAAGAACUGUUUACCGGCGUGGUGCCGAUUCUGG
+TriggerA.seq as the pipeline used it: UGGUGCCGAUUCUGGGGCGUUUACCGUGAAGAACUG
+is TriggerA.seq present in gene?      False
+scanner A window span in gene:        10 -> 46
+filtering.py folded span:              2 -> 38
+```
+
+There is now exactly one slicer, one coordinate convention, and
+`target_scan.verify_pair()` asserts on every returned pair that both triggers
+are literally substrings of their source genes at the recorded offsets.
+`test_trigger_is_a_contiguous_slice_of_its_gene` and
+`test_verify_pair_rejects_a_scrambled_trigger` keep it that way.
+
+### What was taken from the scanner, and what was not
+
+| Taken into `01_target_scan.py` | Why |
+|---|---|
+| pooled FASTA input (`read_fasta_records`, `load_genes`) | the pipeline only handled two genes |
+| the hash-join on the connector | generalised to a k-mer index: **~170× faster** on 4 kb × 4 kb (0.07 s vs ~12 s) |
+| the two-distinct-records rule | an AND gate needs two inputs, not one gene sensing itself twice |
+| GC / motif window filters | kept, but **off by default** — see below |
+
+| Taken into `03_select.py` | Why |
+|---|---|
+| criteria 1, 2, 3, 5, 6 | genuine properties of the trigger itself |
+| the **fixed reference scale** | the scanner's best decision: a quality of 0.8 means the same thing across runs, unlike min-max over a pool of 8 |
+| the per-criterion breakdown | scoring you cannot audit is scoring you cannot trust |
+
+| Deliberately **not** taken | Why |
+|---|---|
+| `build_switch_target` and criteria 4 & 7 | they assume the switch is `revcomp(r1+r2+a+k1)`, i.e. r1 adjacent to r2. In this architecture r2 binds `r2*` on the inhibitory hairpin while r1 binds `r1*` in the primary toehold, separated by `k2*`, an 11-nt loop and `x*`. Those criteria scored a molecule that is never built; the question they asked is answered kinetically in stage 5 |
+| `unpaired_probs(whole_gene)` | a global fold of a full transcript. Accessibility is stage 2's job, on flanked windows |
+| Type IIS filtering of the **trigger** | the trigger is endogenous and never synthesised; Golden Gate sites only matter for the switch. `cfg.scan_forbid_motifs` defaults to `False` |
+| the NUPACK `unpaired_probs` path | its `(n+1)×(n+1)` assumption raises `IndexError`, swallowed by a bare `except` that returns `[0.5]*n`. `thermo.py` reads the diagonal correctly instead |
 
 ## Library use
 
@@ -165,19 +182,71 @@ print(best.switch.core, best.score.total)
 
 ---
 
-## How the stages map to the spec
+## Repository layout — the file names carry the stage number
 
-| Stage | Module | What it does |
+```
+and_gate_pipeline/
+  01_target_scan.py            STAGE 1  find trigger pairs (pooled or two-gene)
+  02_filtering.py              STAGE 2  accessibility of each trigger in context
+  03_select.py                 STAGE 3  Pareto + diversity shortlist
+  04_build_switch.py           STAGE 4  Kim hairpin + VISTA Series-A module
+  04_build_switch_legacy.py    STAGE 4  superseded builder (kept for comparison)
+  04_optimize.py               STAGE 4  restricted-sequence repair
+  05_kinetics.py               STAGE 5  displacement rate vs mRNA decay
+  05_scoring_legacy.py         STAGE 5  superseded hand-weighted scorer
+  05_truth_table.py            STAGE 5  four-condition check for one design
+  05_sweep.py                  STAGE 5  L_x and |a| sweeps
+  06_offtarget.py              STAGE 6  transcriptome complementarity scan
+  06_visualize.py              STAGE 6  arc plots
+
+  config.py  thermo.py  sequence_utils.py  constraints.py  examples.py
+                               shared — used by several stages, no stage number
+  pipeline.py                  orchestrator across all stages
+  cli.py  spec_audit.py        entry point and spec checker
+  _loader.py                   makes the numbered files importable
+```
+
+A Python identifier cannot start with a digit, so `import 01_target_scan` is a
+syntax error. `_loader.py` therefore loads each numbered file by path and
+registers it under a stable alias, in dependency order. **No import statement in
+the package or the tests changed** — the numbers are for humans reading the
+directory, the aliases are for Python:
+
+```python
+from and_gate_pipeline.target_scan import scan_from_fasta   # 01_target_scan.py
+from and_gate_pipeline.kinetics import and_behaviour        # 05_kinetics.py
+```
+
+`python -m and_gate_pipeline map` prints the file ↔ alias ↔ stage table.
+
+## Command line
+
+Because the stage modules are numbered, `python -m and_gate_pipeline.truth_table`
+no longer resolves. Those entry points are subcommands:
+
+```bash
+python -m and_gate_pipeline map                        # file <-> stage <-> alias
+python -m and_gate_pipeline run --demo --out results   # full design run
+python -m and_gate_pipeline scan genes/ --exact        # STAGE 1 only, pooled FASTA
+python -m and_gate_pipeline truth-table                # STAGE 5, one design
+python -m and_gate_pipeline sweep                      # STAGE 5, parameter sweeps
+python -m and_gate_pipeline audit                      # spec audit
+python -m and_gate_pipeline --demo --out results       # `run` is the default
+```
+
+## What each stage does
+
+| Stage | File | What it does |
 |---|---|---|
-| 1. Target scan / triggers | `target_scan.py` | finds length-`Lx` reverse-complement cores in G1/G2 (exact, else **minimum-Hamming** fallback); builds Trigger A = `r1·x·a·k1` and Trigger B = `r2·k2`; runs both role-swap orientations |
-| 2. Thermo filtering | `filtering.py` | MFE + SED + NED + accessibility of each trigger over ±0/10/25/50/100 nt windows; ±100 nt gate |
-| 3. Architecture | `architecture.py` | builds the two-hairpin switch (secondary inhibitory stem + spacer `a*` + Series-A 18 bp primary stem, RBS loop, AUG bulge) and the intended OFF-state structure |
-| 4. Constraints | `constraints.py` | checks the Section-4 equations and logical integrity |
-| 5–7. Scoring | `scoring.py` | hierarchical score: (A) Trigger-B activation, (B) post-B intermediate, (C) Trigger-A ON state, (D) penalties |
-| — Off-target | `offtarget.py` | transcriptome-wide sliding-window complementarity scan; essential-gene hits disqualify |
-| 6. Optimisation | `optimize.py` | repairs forbidden runs / in-frame stops / extra AUGs and nudges OFF-MFE toward −54.25 |
-| Visualisation | `visualize.py` | networkx + matplotlib arc plots and `pair_fraction.csv` export |
-| Engine | `thermo.py` | NUPACK↔ViennaRNA backend abstraction |
+| 1. Find triggers | `01_target_scan.py` | pooled multi-gene **or** two-gene scan; k-mer index join on `x == revcomp(k2)`; min-Hamming fallback; both role orientations; asserts every trigger is a contiguous slice of its gene |
+| 2. Accessibility | `02_filtering.py` | MFE + SED + NED + accessibility of each trigger over ±0/10/25/50/100 nt windows in its native transcript |
+| 3. Selection | `03_select.py` | four absolute criteria (accessibility, self-fold openness, fold stability, cross-talk) → Pareto fronts → greedy pick with ≤50 % window overlap |
+| 4. Build | `04_build_switch.py` | Kim 2019 inhibitory hairpin prepended to VISTA's own Series-A builder |
+| 4. Repair | `04_optimize.py` | forbidden runs / in-frame stops / extra AUGs; nudges OFF-MFE toward −54.25 |
+| 5. Score | `05_kinetics.py` | accessibility-corrected ΔG → displacement rate → P(fire before decay) |
+| 6. Off-target | `06_offtarget.py` | transcriptome-wide sliding-window complementarity; essential-gene hits disqualify |
+| 6. Visualise | `06_visualize.py` | networkx + matplotlib arc plots, `pair_fraction.csv` export |
+| — | `thermo.py` | NUPACK ↔ ViennaRNA behind one interface |
 
 ## Tunable variables (Section 5.2)
 
@@ -224,8 +293,8 @@ model (`temperature_c`, `sodium`, `magnesium`). CLI flags cover the common ones.
 ## Tests
 
 ```bash
-python -m pytest and_gate_pipeline/tests -q
-```
+python -m pytest and_gate_pipeline/tests -q      # or, without pytest installed:
+python -m and_gate_pipeline.tests.test_pipeline  # 40/40
 ```
 
 ## Sources

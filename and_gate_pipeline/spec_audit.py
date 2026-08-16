@@ -210,6 +210,12 @@ def audit(cfg: PipelineConfig | None = None, verbose: bool = True):
     return rows
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
+    """``python -m and_gate_pipeline audit`` -- every spec demand vs a real
+    design.  Exit code 1 when any demand FAILs."""
     rows = audit()
-    raise SystemExit(1 if any(r[2] == FAIL for r in rows) else 0)
+    return 1 if any(r[2] == FAIL for r in rows) else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

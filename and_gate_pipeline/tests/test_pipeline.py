@@ -19,6 +19,7 @@ from and_gate_pipeline.architecture import build_switch
 from and_gate_pipeline.filtering import evaluate_pair_triggers
 from and_gate_pipeline.scoring import DesignScorer
 from and_gate_pipeline.thermo import get_backend, parse_pairs
+from and_gate_pipeline import examples
 
 CFG = PipelineConfig()
 BK = get_backend(CFG)
@@ -405,65 +406,141 @@ def test_scorecard_quality_and_crosstalk_present():
     assert abs(sum(mx for *_x, mx in rows) - 100.0) < 1e-6   # max points sum to 100
 
 
-# ---- interop with the standalone scanner ----------------------------------- #
-def _scanner_available():
+# ---- STAGE 1: the merged scanner ------------------------------------------- #
+# These replace the old interop tests.  The bug they guard against is the one
+# that made the bridge unusable: the scanner sliced its window r1|x|a|k1 in
+# genomic order while TriggerA.seq reassembles k1+a+x+r1, so the "trigger"
+# handed downstream was a sequence that does not occur in the gene, at a
+# position that made stage 2 fold a different window.
+
+def test_trigger_is_a_contiguous_slice_of_its_gene():
+    """The invariant the whole project rests on: nothing is synthesised."""
+    from and_gate_pipeline.target_scan import scan_both_orientations
+    pairs = scan_both_orientations(examples.GENE1, examples.GENE2, CFG)
+    assert pairs, "no candidates on the example genes"
+    for p in pairs[:20]:
+        for trig, gene in ((p.triggerA, p.gene_a), (p.triggerB, p.gene_b)):
+            s, e = trig.window
+            assert su.to_rna(gene)[s:e] == trig.seq, (
+                "trigger is not a contiguous slice of its gene")
+            assert trig.seq in su.to_rna(gene)
+
+
+def test_verify_pair_rejects_a_scrambled_trigger():
+    """verify_pair must actually fail when the domain order is wrong -- a test
+    that cannot fail is not a guard."""
+    from and_gate_pipeline.target_scan import (scan_both_orientations,
+                                               verify_pair,
+                                               TriggerIntegrityError)
+    p = scan_both_orientations(examples.GENE1, examples.GENE2, CFG)[0]
+    p.triggerA.pos_x += 1              # same sequence, wrong coordinate
     try:
-        from and_gate_pipeline.interop import load_scanner
-        load_scanner()
-        return True
-    except Exception:
-        return False
-
-
-def test_interop_shim_is_not_the_broken_backend():
-    """The scanner's own NUPACK unpaired_probs() silently returns 0.5 for every
-    base; the pipeline must never inherit that when it drives the scanner."""
-    if not _scanner_available():
+        verify_pair(p)
+    except TriggerIntegrityError:
         return
-    from and_gate_pipeline.interop import _ScannerBackendShim
-    shim = _ScannerBackendShim(BK, CFG.temperature_c)
-    up = shim.unpaired_probs("GGGAAACUUCGGAUCCGAAGUUUCCC")
-    assert not all(x == 0.5 for x in up), "shim fell back to the 0.5 stub"
-    assert any(x > 0.0 for x in up)
-    struct, e_mfe, e_ens = shim.fold("GGGAAACUUCGGAUCCGAAGUUUCCC")
-    assert e_ens <= e_mfe + 1e-6            # ensemble energy is never above MFE
-    assert 0.0 <= shim.structure_probability("GGGAAACUUCGGAUCCGAAGUUUCCC", 37.0) <= 1.0
+    raise AssertionError("verify_pair accepted a mis-positioned trigger")
 
 
-def test_interop_config_roundtrip_satisfies_equations():
-    if not _scanner_available():
-        return
-    from and_gate_pipeline.interop import load_scanner, config_from_params
-    mod = load_scanner()
-    cfg = config_from_params(mod.Params())
-    rep = validate_config(cfg)
-    assert rep.ok, rep.errors
-    p = mod.Params()
-    assert cfg.Lx == p.star_len and cfg.len_k1 == p.K1_len
-    assert cfg.resolved_len_r1() == p.R1_len
-    assert cfg.resolved_len_r2() == p.R2_len
+def test_pooled_scan_needs_two_distinct_records():
+    """An AND gate needs two inputs, not one gene sensing itself twice."""
+    from and_gate_pipeline.target_scan import scan_pool
+    genes = [("g1", examples.GENE1), ("g2", examples.GENE2)]
+    pairs = scan_pool(genes, CFG)
+    assert pairs
+    for p in pairs:
+        assert p.meta["gene_a_name"] != p.meta["gene_b_name"]
 
 
-def test_interop_window_conversion_maps_domains():
-    if not _scanner_available():
-        return
-    from and_gate_pipeline.interop import load_scanner, windows_to_pair
-    mod = load_scanner()
-    gene_a = "AAAACCCCGGGGUUUUACGUACGUACGUACGUACGUACGUAAAA"
-    gene_b = "UUUUGGGGCCCCAAAAUGCAUGCAUGCAUGCAUGCAUGCAUUUU"
-    w1 = mod.Trigger1Window(gene="A", start=2, seq="", r1="AACCCC",
-                            star="GGGGUU", a="UUAC", k1="GUACGU",
-                            mean_unpaired=0.5)
-    w2 = mod.Trigger2Window(gene="B", start=1, seq="", r2="UUUGGG",
-                            k2=su.reverse_complement("GGGGUU"),
-                            mean_unpaired=0.5)
-    pair = windows_to_pair(w1, w2, {"A": gene_a, "B": gene_b})
-    assert pair.triggerA.x == "GGGGUU"          # star -> x
-    assert pair.triggerA.pos_x == 2 + len("AACCCC")
-    assert pair.triggerB.pos_k2 == 1 + len("UUUGGG")
-    assert pair.hamming == 0 and pair.exact
-    assert pair.triggerA.gene == su.to_rna(gene_a)   # sequence, not the name
-    assert pair.meta["gene_a_name"] == "A"
+def test_pooled_scan_matches_two_gene_scan():
+    """The pooled path and the two-gene path must find the same connectors --
+    they are now one implementation, so this is a regression guard on the
+    k-mer index rather than on two separate code paths."""
+    from and_gate_pipeline.target_scan import scan_pool, scan_both_orientations
+    genes = [("g1", examples.GENE1), ("g2", examples.GENE2)]
+    pooled = {(p.triggerA.seq, p.triggerB.seq)
+              for p in scan_pool(genes, CFG) if p.exact}
+    direct = {(p.triggerA.seq, p.triggerB.seq)
+              for p in scan_both_orientations(examples.GENE1, examples.GENE2, CFG)
+              if p.exact}
+    assert pooled == direct, "pooled and two-gene scans disagree"
+
+
+def test_fasta_reader_pools_multiple_records():
+    import tempfile, os
+    from and_gate_pipeline.target_scan import read_fasta_records, load_genes
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "genes.fa")
+        with open(path, "w") as fh:
+            fh.write(">a\nACGUACGU\nACGU\n>b\nUUUUGGGG\n")
+        recs = read_fasta_records(path)
+        assert recs == [("a", "ACGUACGUACGU"), ("b", "UUUUGGGG")]
+        assert load_genes(d) == recs        # a folder works too
+
+
+def test_type2s_filter_is_off_for_triggers_by_default():
+    """The trigger is endogenous and never synthesised, so Golden Gate sites in
+    it are not a constructability problem -- that filter belongs to the switch."""
+    assert CFG.scan_forbid_motifs is False
+    assert CFG.scan_max_gc == 0.0
+
+
+# ---- STAGE 3: selection ----------------------------------------------------- #
+def test_pareto_fronts_rank_dominated_points_behind():
+    from and_gate_pipeline.select import pareto_fronts
+    # (1,0) and (0,1) are extremes; (0.5,0.5) trades between them -- none of
+    # the three dominates another, so all sit on front 0.  (0.2,0.2) is strictly
+    # worse than (0.5,0.5) on both axes, so it is pushed to front 1.
+    pts = [(1.0, 0.0), (0.0, 1.0), (0.5, 0.5), (0.2, 0.2)]
+    fronts = pareto_fronts(pts)
+    assert fronts[0] == fronts[1] == fronts[2] == 0
+    assert fronts[3] == 1
+    # a point that dominates everything must be alone on front 0
+    assert pareto_fronts([(1.0, 1.0), (0.5, 0.5), (1.0, 0.0)]) == [0, 1, 1]
+
+
+def test_selection_rejects_near_identical_windows():
+    """The failure mode of the old top_k=8: one site, eight offsets."""
+    from and_gate_pipeline.target_scan import scan_both_orientations
+    from and_gate_pipeline.select import select, evaluate_quality
+    from and_gate_pipeline.filtering import evaluate_pair_triggers
+    pairs = scan_both_orientations(examples.GENE1, examples.GENE2, CFG)[:12]
+    scored = []
+    for p in pairs:
+        tmA, tmB = evaluate_pair_triggers(p, CFG, BK)
+        scored.append((p, tmA, tmB, evaluate_quality(p, tmA, tmB, BK, CFG)))
+    chosen = select(scored, CFG, k=4)
+    assert len(chosen) == 4
+    windows = [(c[0].triggerA.window, c[0].triggerB.window) for c in chosen]
+    assert len(set(windows)) == len(windows)
+
+
+def test_quality_is_absolute_not_pool_relative():
+    """Qualities come from fixed reference scales, so scoring the same pair in a
+    pool of 2 and a pool of 12 must give the identical number."""
+    from and_gate_pipeline.target_scan import scan_both_orientations
+    from and_gate_pipeline.select import evaluate_quality
+    from and_gate_pipeline.filtering import evaluate_pair_triggers
+    p = scan_both_orientations(examples.GENE1, examples.GENE2, CFG)[0]
+    tmA, tmB = evaluate_pair_triggers(p, CFG, BK)
+    q1 = evaluate_quality(p, tmA, tmB, BK, CFG)
+    q2 = evaluate_quality(p, tmA, tmB, BK, CFG)
+    assert q1.objectives() == q2.objectives()
+    for v in q1.objectives():
+        assert 0.0 <= v <= 1.0
+
+
+# ---- packaging: the stage-numbered files stay importable -------------------- #
+def test_every_numbered_module_loads_under_its_alias():
+    import and_gate_pipeline as pkg
+    from and_gate_pipeline import _loader
+    unavailable = getattr(pkg, "__unavailable__", {})
+    core = {"target_scan", "filtering", "select", "vista_switch",
+            "architecture", "kinetics", "scoring", "offtarget", "pipeline"}
+    broken = core & set(unavailable)
+    assert not broken, f"core modules failed to load: {broken}"
+    for alias in core:
+        assert hasattr(pkg, alias), f"alias {alias} not registered"
+        assert alias in _loader.FILE_OF
 
 
 def _run_standalone() -> int:

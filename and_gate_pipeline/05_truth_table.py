@@ -149,7 +149,9 @@ def report(pair, cfg: PipelineConfig | None = None, reporter: str = ""):
     return sw
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
+    """``python -m and_gate_pipeline truth-table`` -- the four-condition check
+    plus nucleation occupancy for the best example design."""
     from .target_scan import scan_both_orientations
     from . import examples
     cfg = PipelineConfig()
@@ -157,3 +159,8 @@ if __name__ == "__main__":
     exact = [p for p in pairs if p.exact] or pairs
     print("candidates: %d (exact: %d)" % (len(pairs), sum(p.exact for p in pairs)))
     report(exact[0], cfg)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

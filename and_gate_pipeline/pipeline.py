@@ -1,13 +1,24 @@
-"""End-to-end orchestrator: genes in, ranked AND-gate switch designs out.
+"""Orchestrator: genes in, ranked AND-gate switch designs out.
 
     run_pipeline(gene1, gene2, cfg) ->
-        1. logical-integrity check                (constraints)
-        2. target scan + trigger definition       (target_scan)  [both orientations]
-        3. trigger thermodynamic filtering         (filtering)    [Stage 2]
-        4. cheap pre-ranking + top-K selection
-        5. build switch + optimise restricted seqs (architecture, optimize)
-        6. full hierarchical scoring               (scoring)      [Stage 7]
-        7. rank, write CSV, optional arc plots
+        logical-integrity check                     constraints.py
+        STAGE 1  find trigger pairs                 01_target_scan.py
+        STAGE 2  accessibility in gene context      02_filtering.py
+        STAGE 3  Pareto + diversity shortlist       03_select.py
+        STAGE 4  build switch, repair sequences     04_build_switch*.py,
+                                                    04_optimize.py
+        STAGE 5  score                              05_scoring_legacy.py
+        STAGE 6  off-target, rank, write outputs    06_offtarget.py,
+                                                    06_visualize.py
+
+Note on stage 4/5.  This orchestrator still imports ``.architecture``
+(``04_build_switch_legacy.py``) and ``.scoring`` (``05_scoring_legacy.py``).
+Every validated conclusion in the project came from ``.vista_switch``
+(``04_build_switch.py``) plus ``.kinetics`` (``05_kinetics.py``), which are
+currently reachable only through the sweep and truth-table tools.  Moving this
+function onto them is the top of the to-do list; the two builders return
+different objects (``DesignedSwitch`` vs ``VistaAndSwitch``), so it is a real
+port, not a one-line swap.
 """
 
 from __future__ import annotations
@@ -23,6 +34,7 @@ from .constraints import validate_config, IntegrityReport
 from .filtering import evaluate_pair_triggers, TriggerMetrics
 from .optimize import optimize_switch
 from .scoring import DesignScorer, ScoreCard
+from .select import evaluate_quality, select
 from .target_scan import scan_both_orientations, TriggerPair
 from .thermo import get_backend
 
@@ -102,11 +114,41 @@ class PipelineOutput:
 
 
 def _prescore(tmA: TriggerMetrics, tmB: TriggerMetrics, pair: TriggerPair) -> float:
-    """Cheap ranking to pick which candidates get the expensive full score:
-    reward accessible triggers and low Hamming (good complementary core)."""
+    """Legacy scalar shortlist (``cfg.select_use_pareto = False``).
+
+    Kept so old runs stay reproducible.  It collapses four independent
+    properties into one number and has no diversity rule, which is why stage 3
+    replaced it -- see :mod:`.select`.
+    """
     return (tmA.accessibility + tmB.accessibility
             - 0.05 * pair.hamming
             + (0.2 if tmA.passes else 0) + (0.2 if tmB.passes else 0))
+
+
+def _shortlist(measured, cfg, backend, k, progress):
+    """STAGE 3 -- choose which candidates earn the expensive build+score.
+
+    ``measured`` is [(pair, tmA, tmB), ...] straight out of stage 2.  Returns
+    the same tuples, shortened, in the order they should be processed.
+    """
+    if not cfg.select_use_pareto:
+        ranked = sorted(measured,
+                        key=lambda t: -_prescore(t[1], t[2], t[0]))[:k]
+        progress(f"[select] legacy scalar shortlist: {len(ranked)} of "
+                 f"{len(measured)}")
+        return ranked
+
+    scored = []
+    for pair, tmA, tmB in measured:
+        try:
+            q = evaluate_quality(pair, tmA, tmB, backend, cfg)
+        except Exception as ex:                      # pragma: no cover
+            progress(f"  [select] quality failed for one pair: {ex}")
+            continue
+        scored.append((pair, tmA, tmB, q))
+
+    chosen = select(scored, cfg, k, progress=progress)
+    return [(p, a, b) for p, a, b, _q in chosen]
 
 
 def run_pipeline(gene1: str | None = None, gene2: str | None = None,
@@ -127,9 +169,15 @@ def run_pipeline(gene1: str | None = None, gene2: str | None = None,
 
     ``pairs``: pre-computed :class:`TriggerPair` list.  When supplied, the
     built-in two-gene scan is skipped and these pairs are built/scored instead
-    -- this is how :mod:`.interop` feeds in candidates found by the standalone
-    pooled multi-gene scanner.  ``viz_genes``: {name: sequence} to arc-plot
-    (defaults to gene1/gene2).
+    -- that is how a pooled multi-gene run feeds in candidates::
+
+        from and_gate_pipeline.target_scan import scan_from_fasta
+        pairs = scan_from_fasta("genes/", cfg)
+        out = run_pipeline(cfg=cfg, pairs=pairs, out_dir="results")
+
+    (this replaces the old ``interop.run_from_scanner``; pooled discovery now
+    lives in stage 1 itself, so there is no bridge to keep in sync).
+    ``viz_genes``: {name: sequence} to arc-plot (defaults to gene1/gene2).
     """
     cfg = cfg or PipelineConfig()
     backend = get_backend(cfg)
@@ -153,19 +201,21 @@ def run_pipeline(gene1: str | None = None, gene2: str | None = None,
     if not pairs:
         return out
 
-    # 3. trigger filtering + 4. pre-rank --------------------------------- #
-    scored_pre = []
+    # 3. STAGE 2 filtering ----------------------------------------------- #
+    measured = []
     for p in pairs:
         try:
             tmA, tmB = evaluate_pair_triggers(p, cfg, backend)
         except Exception as ex:                      # pragma: no cover
             progress(f"  filtering skipped a pair: {ex}")
             continue
-        scored_pre.append((_prescore(tmA, tmB, p), p, tmA, tmB))
-    scored_pre.sort(key=lambda t: -t[0])
-    shortlist = scored_pre[:max_full_score]
-    progress(f"[filter] scoring top {len(shortlist)} of {len(scored_pre)} "
-             f"candidates in full")
+        measured.append((p, tmA, tmB))
+    progress(f"[filter] {len(measured)} pairs measured in gene context "
+             f"({sum(1 for _p, a, b in measured if a.passes and b.passes)} "
+             f"pass the accessibility gate)")
+
+    # 4. STAGE 3 selection ------------------------------------------------ #
+    shortlist = _shortlist(measured, cfg, backend, max_full_score, progress)
 
     # 5-6. build, optimise, full score ----------------------------------- #
     codon_path = codon_table_path or _DEFAULT_CODON
@@ -178,7 +228,7 @@ def run_pipeline(gene1: str | None = None, gene2: str | None = None,
         expression=expression)
 
     results: list[DesignResult] = []
-    for k, (_pre, p, tmA, tmB) in enumerate(shortlist, 1):
+    for k, (p, tmA, tmB) in enumerate(shortlist, 1):
         try:
             sw = build_switch(p, cfg, reporter=reporter)
             if optimize:

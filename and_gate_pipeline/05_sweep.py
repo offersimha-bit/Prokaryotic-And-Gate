@@ -100,6 +100,13 @@ def sweep(g1: str, g2: str, conc: float = 10e-9):
         print()
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
+    """``python -m and_gate_pipeline sweep`` -- L_x and |a| sweeps on the
+    bundled example genes."""
     from . import examples
     sweep(examples.GENE1, examples.GENE2)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
