@@ -61,6 +61,70 @@ class VistaAndSwitch:
     primary_only: str          # the TSgen2 switch alone (what VISTA's model scores)
     reporter: str = ""
     notes: list = field(default_factory=list)
+    broken: list = field(default_factory=list)
+    """Offsets inside r1_switch deliberately mismatched (bulge / clamp detune),
+    so the intended structure can annotate them as unpaired instead of asserting
+    pairs that cannot form."""
+
+    @property
+    def full(self) -> str:
+        """The translated construct.  ``core`` already ends with linker+CDS from
+        VISTA's builder, so this is the same string -- exposed under the name the
+        rest of the pipeline uses."""
+        return self.core
+
+    @property
+    def off_structure(self) -> str:
+        """Intended OFF-state dot-bracket over ``core``.
+
+        Written from the spans rather than folded, so that comparing it to the
+        actual fold (SED) tests whether the design we MEANT was built.  That
+        comparison is what caught a bulge that had been annotated but never put
+        into the sequence.
+        """
+        s, n = self.spans, len(self.core)
+        db = ["."] * n
+
+        def fill(name, ch):
+            if name in s:
+                for i in range(*s[name]):
+                    db[i] = ch
+
+        # inhibitory hairpin:  k2*( r1_sw( loop )r1* )x*
+        fill("k2star", "(")
+        fill("r1_switch", "(")
+        fill("r1star", ")")
+        fill("xstar", ")")
+        r1s = s["r1_switch"][0]
+        r1e = s["r1star"][1]
+        for off in self.broken:                 # mismatched -> unpaired both sides
+            if r1s + off < n:
+                db[r1s + off] = "."
+            mirror = r1e - 1 - off
+            if s["r1star"][0] <= mirror < r1e:
+                db[mirror] = "."
+
+        # primary hairpin:  k1*( top0-3( top6-12( RBSloop )top23-29 )top32-35 )k1
+        fill("k1star", "(")
+        fill("ab_dom", ")")
+        if "top" in s:
+            t0 = s["top"][0]
+            body = self.cfg.primary_stem_len - self.cfg.len_k1     # 12
+            for i in range(t0, t0 + 3):
+                db[i] = "("
+            for i in range(t0 + 3, t0 + 6):
+                db[i] = "."                      # 3x3 internal loop, ascending
+            for i in range(t0 + 6, t0 + body):
+                db[i] = "("
+            for i in range(t0 + body, s["top"][1] - 12):
+                db[i] = "."                      # RBS loop
+            for i in range(s["top"][1] - 12, s["top"][1] - 6):
+                db[i] = ")"
+            for i in range(s["top"][1] - 6, s["top"][1] - 3):
+                db[i] = "."                      # the AUG bulge (start codon)
+            for i in range(s["top"][1] - 3, s["top"][1]):
+                db[i] = ")"
+        return "".join(db)
 
     def seq_of(self, name: str) -> str:
         s, e = self.spans[name]
@@ -160,4 +224,5 @@ def build(pair: TriggerPair, cfg: PipelineConfig, reporter: str = "") -> VistaAn
         spans["start_codon"] = (tp0 + aug_off, tp0 + aug_off + 3)
 
     return VistaAndSwitch(pair=pair, cfg=cfg, core=core, spans=spans,
-                          primary_only=primary, reporter=su.to_rna(reporter))
+                          primary_only=primary, reporter=su.to_rna(reporter),
+                          broken=list(broken))

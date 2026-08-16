@@ -353,6 +353,15 @@ class PipelineConfig:
     magnesium: float = 0.0
     material: str = "rna"
     ensemble: str = "stacking"
+    use_legacy_scoring: bool = False
+    """Score with the old hand-weighted DesignScorer (05_scoring_legacy.py)
+    instead of the kinetic model.
+
+    False by default: the legacy path builds with 04_build_switch_legacy.py,
+    whose switch has no Trigger-B toehold at all (dG(B:switch) was positive),
+    and ranks by weights invented by hand -- while the metric document opens
+    with "no hand-invented weights".  Kept only so old runs reproduce."""
+
     prefer_nupack: bool = True
     random_seed: int = 0
     top_n: int = 12

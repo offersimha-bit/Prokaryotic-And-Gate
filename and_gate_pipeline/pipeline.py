@@ -32,8 +32,10 @@ from .architecture import build_switch, DesignedSwitch
 from .config import PipelineConfig
 from .constraints import validate_config, IntegrityReport
 from .filtering import evaluate_pair_triggers, TriggerMetrics
+from .kinetics import KineticParams, four_state
 from .optimize import optimize_switch
 from .scoring import DesignScorer, ScoreCard
+from .vista_switch import build
 from .select import evaluate_quality, select
 from .target_scan import scan_both_orientations, TriggerPair
 from .thermo import get_backend
@@ -59,6 +61,50 @@ def _find_codon_table() -> str | None:
 
 
 _DEFAULT_CODON = _find_codon_table()
+
+
+@dataclass
+class KineticScore:
+    """ScoreCard-shaped wrapper around the four-state kinetic result.
+
+    Ranking is by P_11 with the logic margin as tiebreak.  Deliberately NOT by
+    the margin alone: once the trigger's own opening cost is charged the OFF
+    states can fall to ~1e-14, and a ratio against that is numerically
+    meaningless (values of 1e8 occur).  Stage 9 replaces this with a Pareto
+    front over floored axes -- see the ranking task.
+    """
+    metrics: dict
+
+    @property
+    def total(self) -> float:
+        return self.metrics["P_11"] + 1e-6 * min(self.metrics["logic_margin"], 1e3)
+
+    @property
+    def flags(self) -> list:
+        m, out = self.metrics, []
+        if m["P_11"] < 0.01:
+            out.append("on_state_negligible")
+        if m["P_10"] > 0.05 * max(m["P_11"], 1e-30):
+            out.append("triggerA_leaks")
+        if m["f_B"] < 0.5:
+            out.append("triggerB_arm_slow")
+        return out
+
+    def as_row(self) -> dict:
+        m = self.metrics
+        row = {
+            "P_00": m["P_00"], "P_10": m["P_10"],
+            "P_01": m["P_01"], "P_11": m["P_11"],
+            "logic_margin": m["logic_margin"], "on_off": m["on_off"],
+            "f_B": m["f_B"],
+            "dG_toehold_off": m["dG_toehold_off"],
+            "dG_toehold_afterB": m["dG_toehold_afterB"],
+            "dG_toehold_B": m["dG_toehold_B"],
+            "t_fire_B_s": m["t_fire_B_s"],
+            "flags": ";".join(self.flags),
+        }
+        return {k: (round(v, 6) if isinstance(v, float) else v)
+                for k, v in row.items()}
 
 
 @dataclass
@@ -171,6 +217,7 @@ def run_pipeline(gene1: str | None = None, gene2: str | None = None,
                  out_dir: str | None = None,
                  pairs: list | None = None,
                  viz_genes: dict | None = None,
+                 kinetic_params=None,
                  progress=print) -> PipelineOutput:
     """Design AND-gate switches from two genes.
 
@@ -242,23 +289,31 @@ def run_pipeline(gene1: str | None = None, gene2: str | None = None,
     # 4. STAGE 3 selection ------------------------------------------------ #
     shortlist = _shortlist(measured, cfg, backend, max_full_score, progress)
 
-    # 5-6. build, optimise, full score ----------------------------------- #
-    codon_path = codon_table_path or _DEFAULT_CODON
-    if codon_path is None:
-        progress("  [warn] no codon-usage table found; translation-efficiency "
-                 "scoring will use a neutral default")
-    scorer = DesignScorer(
-        cfg, backend, codon_table_path=codon_path,
-        transcriptome=transcriptome, essential_genes=essential_genes,
-        expression=expression)
+    # 5-6. build + score --------------------------------------------------- #
+    if cfg.use_legacy_scoring:
+        codon_path = codon_table_path or _DEFAULT_CODON
+        if codon_path is None:
+            progress("  [warn] no codon-usage table found; translation-"
+                     "efficiency scoring will use a neutral default")
+        legacy_scorer = DesignScorer(
+            cfg, backend, codon_table_path=codon_path,
+            transcriptome=transcriptome, essential_genes=essential_genes,
+            expression=expression)
+    else:
+        legacy_scorer = None
+    kp = kinetic_params or KineticParams()
 
     results: list[DesignResult] = []
     for k, (p, tmA, tmB) in enumerate(shortlist, 1):
         try:
-            sw = build_switch(p, cfg, reporter=reporter)
-            if optimize:
-                sw, _rep = optimize_switch(sw, cfg, backend)
-            sc = scorer.score(sw, tmA, tmB)
+            if legacy_scorer is not None:
+                sw = build_switch(p, cfg, reporter=reporter)
+                if optimize:
+                    sw, _rep = optimize_switch(sw, cfg, backend)
+                sc = legacy_scorer.score(sw, tmA, tmB)
+            else:
+                sw = build(p, cfg, reporter=reporter)
+                sc = KineticScore(four_state(sw, cfg, kp))
         except Exception as ex:                      # pragma: no cover
             progress(f"  [{k}] scoring failed: {ex}")
             continue
@@ -269,8 +324,9 @@ def run_pipeline(gene1: str | None = None, gene2: str | None = None,
         r.rank = i
     out.results = results
     out.n_scored = len(results)
-    progress(f"[score] {len(results)} designs scored; "
-             f"top total = {results[0].score.total:.3f}" if results else "no designs")
+    progress(f"[score] {len(results)} designs scored "
+             f"({'legacy weights' if legacy_scorer else 'kinetic'}); "
+             f"top = {results[0].score.total:.4g}" if results else "no designs")
 
     # 7. outputs ---------------------------------------------------------- #
     if out_dir:
