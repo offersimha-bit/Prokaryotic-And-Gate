@@ -108,6 +108,25 @@ class KineticScore:
                 for k, v in row.items()}
 
 
+def gene_label(seq: str) -> str:
+    """Short, stable identifier for a source gene.
+
+    ``TriggerPair`` carries the gene as a SEQUENCE, not a name.  With the old
+    89-nt synthetic pair, writing it into every output row was harmless; with
+    real transcripts it is not -- thrA is 2463 nt, which made the ranked CSV 83%
+    repeated gene sequence and final_designs.txt 35 KB of mostly one gene.
+
+    The label keeps both ends plus the length, so it stays human-recognisable
+    and still distinguishes two genes that share a prefix.  The full sequences
+    are the pipeline's INPUT: they live in data/genes/ or in whatever FASTA the
+    caller supplied, so nothing is lost by not echoing them.
+    """
+    seq = seq or ""
+    if len(seq) <= 24:
+        return seq
+    return f"{seq[:10]}..{seq[-6:]}[{len(seq)}nt]"
+
+
 @dataclass
 class DesignResult:
     pair: TriggerPair
@@ -125,7 +144,7 @@ class DesignResult:
             "rank": self.rank, "pareto_front": self.front,
             "is_knee": self.is_knee,
             "orientation": p.orientation,
-            "gene_A": p.gene_a, "gene_B": p.gene_b,
+            "gene_A": gene_label(p.gene_a), "gene_B": gene_label(p.gene_b),
             "x": p.triggerA.x, "k2": p.triggerB.k2,
             "hamming": p.hamming, "exact": p.exact,
             "triggerA": p.triggerA.seq, "triggerB": p.triggerB.seq,
@@ -357,6 +376,26 @@ def run_pipeline(gene1: str | None = None, gene2: str | None = None,
     return out
 
 
+def _score_detail(score) -> str:
+    """One line of per-design detail, for whichever scorer produced it.
+
+    The two scorers report different quantities and there is no meaningful
+    common subset: the kinetic one has state probabilities, the legacy one has
+    hand-weighted sub-scores.  Rendering whichever is present keeps the writer
+    working on both paths -- it previously hard-coded the legacy fields, so
+    wiring the kinetic scorer in as the default made every run crash after the
+    CSV was already on disk.
+    """
+    m = getattr(score, "metrics", None)
+    if m is not None:                     # KineticScore
+        return (f"P_11={m['P_11']:.4g} P_10={m['P_10']:.3g} "
+                f"P_01={m['P_01']:.3g} P_00={m['P_00']:.3g} "
+                f"margin={m['logic_margin']:.4g}")
+    return (f"B={score.triggerB_activation:.3f} "     # legacy ScoreCard
+            f"INT={score.intermediate_state:.3f} "
+            f"ON={score.triggerA_on_state:.3f} PEN={score.penalty:.3f}")
+
+
 def _write_final_designs(out: PipelineOutput, cfg: PipelineConfig, path: str):
     top = out.results[:cfg.top_n]
     lines = ["# AND-gate toehold-switch designs (ranked)",
@@ -367,13 +406,11 @@ def _write_final_designs(out: PipelineOutput, cfg: PipelineConfig, path: str):
         lines += [
             f">>> rank {r.rank}   score={r.score.total:.3f}   "
             f"orientation={p.orientation}   hamming={p.hamming}",
-            f"    TriggerA ({p.gene_a}): {p.triggerA.seq}",
-            f"    TriggerB ({p.gene_b}): {p.triggerB.seq}",
+            f"    TriggerA ({gene_label(p.gene_a)}): {p.triggerA.seq}",
+            f"    TriggerB ({gene_label(p.gene_b)}): {p.triggerB.seq}",
             f"    switch  : {r.switch.core}",
             f"    OFF-struct: {r.switch.off_structure}",
-            f"    B={r.score.triggerB_activation:.3f} "
-            f"INT={r.score.intermediate_state:.3f} "
-            f"ON={r.score.triggerA_on_state:.3f} PEN={r.score.penalty:.3f}",
+            f"    {_score_detail(r.score)}",
             f"    flags: {', '.join(r.score.flags) or 'none'}",
             "",
         ]
@@ -401,8 +438,15 @@ def _emit_visuals(out, viz_genes, cfg, backend, out_dir, progress):
     # arc plots of the top designs' switches with domain shading
     for r in out.results[:min(3, len(out.results))]:
         sw = r.switch
-        regions = {k: v for k, v in sw.domains.spans.items()
-                   if k in ("sec_k2star", "sec_xstar", "prim_k1star", "prim_loop")}
+        # both builders expose spans, but at different depths: the legacy
+        # DesignedSwitch nests them under .domains, VistaAndSwitch carries
+        # .spans directly.  Names differ too, so shade whatever is present.
+        spans = getattr(getattr(sw, "domains", None), "spans", None)
+        if spans is None:
+            spans = getattr(sw, "spans", {}) or {}
+        wanted = ("sec_k2star", "sec_xstar", "prim_k1star", "prim_loop",
+                  "k2star", "xstar", "a_star_gap", "top", "rbs", "start_codon")
+        regions = {k: v for k, v in spans.items() if k in wanted}
         try:
             arc_plot(sw.core, os.path.join(viz, f"rank{r.rank}_switch_arcs.png"),
                      backend, title=f"rank {r.rank} switch (OFF state)",
