@@ -220,6 +220,48 @@ Cheap checks, all passing for all five.
 
 ---
 
+## Ensemble defects and codon usage (Green 2026 VISTA panel)
+
+Added because VISTA reports them for its triggers. Both defects come straight
+from ViennaRNA (`fc.ensemble_defect`), normalised 0..1 so they compare across
+lengths.
+
+### SED — specified ensemble defect
+Measured against the **fully unpaired** reference. Reads as *how far from open
+is this molecule*: lower means more single-stranded. A trigger that has to
+invade a hairpin wants a low SED, because anything it spends unfolding itself is
+not available for invading.
+
+### NED — native ensemble defect
+Measured against the molecule's **own MFE structure**. Reads as *how
+representative is that MFE picture*: lower means the ensemble really does look
+like the MFE. This is the quantitative form of a warning that recurs throughout
+this project — candidate 4's MFE carries only **2.2%** of its ensemble, so any
+claim resting on a single structure (the PDF's "AUG bulge in OFF" row, its
+toehold–CDS spillover argument) is weaker than it appears.
+
+Candidate 5, for scale: switch SED 0.501 / NED 0.265; trigger SED 0.306 /
+NED 0.251.
+
+### Codon usage
+Following VISTA's `compute_codon_fractions`, using the same
+`ecoli_codon_usage_table.csv` already in this repo. Three numbers per region:
+the mean E. coli usage **fraction** across the trigger's binding region, the
+mean over its **first two codons** (translation initiation is disproportionately
+sensitive to these), and the **whole-gene** mean for context. A fraction is the
+share of an amino acid's codons that are this one in E. coli, so 0.5 is
+unremarkable and 0.05 means the organism almost never uses it.
+
+**One result worth carrying:** the codon-max mCherry that *failed* at the bench
+scores **0.471**, better than the working original's **0.384**. Poor codon usage
+is therefore unlikely to explain that failure, and a low number here should be
+treated as a flag to investigate, not a verdict. Our stage-2 variants sit at
+0.385–0.397 — and because codon usage now breaks ties during recoding, the
+recoded windows typically come out *better* than the original (candidate 5's r2
+window goes 0.291 → 0.432, its trigger-A window 0.406 → 0.535).
+
+---
+
 ## Metrics we add beyond the PDF
 
 | metric | why |
@@ -231,6 +273,8 @@ Cheap checks, all passing for all five.
 | **Centroid** structure and its probability | the structure closest to the ensemble average. For candidate 4 the centroid leaves the toehold completely unpaired, suggesting the toehold–CDS spillover the PDF worries about is an MFE artefact |
 | **Ensemble ΔG** and diversity | how broad the structural ensemble is |
 | **NUPACK column** for each energy | a second engine as a cross-check, not a replacement |
+| **SED / NED** | see above -- accessibility, and how much the MFE can be trusted |
+| **Codon usage** | E. coli usage fraction per region, VISTA-style |
 
 ---
 

@@ -25,6 +25,15 @@ import csv
 import os
 import re
 
+# Make relative imports work when this file is run on its own (the Run button in
+# Visual Studio executes it as a plain script, with no package context). Runs
+# only in that case; a normal "import poc_and.x" skips it entirely.
+if __package__ in (None, ""):
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    import poc_and  # noqa: F401  -- makes the parent package real
+    __package__ = "poc_and"
+
 from .folding import RNA   # via folding, so the setup check runs first
 
 from . import candidates as cd
@@ -330,3 +339,9 @@ def run(config):
             "Stage 0 failed: %d value(s) no longer reproduce the PDF. "
             "Fix this before trusting anything downstream." % len(failures))
     return rows
+
+
+# Pressing Run on this file alone does stage 0, using main.py's CONFIG.
+if __name__ == "__main__":
+    from poc_and.main import CONFIG
+    run(dict(CONFIG))

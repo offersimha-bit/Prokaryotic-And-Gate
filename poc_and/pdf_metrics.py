@@ -17,9 +17,19 @@ Reproduction status, briefly:
   not wired    1 row (the VISTA similarity score)
 """
 
+# Make relative imports work when this file is run on its own (the Run button in
+# Visual Studio executes it as a plain script, with no package context). Runs
+# only in that case; a normal "import poc_and.x" skips it entirely.
+if __package__ in (None, ""):
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    import poc_and  # noqa: F401  -- makes the parent package real
+    __package__ = "poc_and"
+
 from .folding import RNA   # via folding, so the setup check runs first
 
 from . import candidates as cd
+from . import codon_usage
 from . import folding
 
 
@@ -277,6 +287,64 @@ def unwanted_codons(switch, spans):
 
 
 # ---------------------------------------------------------------------------
+# Ensemble defects and codon usage -- the extra panel Green 2026 VISTA reports
+# ---------------------------------------------------------------------------
+
+def ensemble_defects(sequence, temperature_c=37.0):
+    """
+    SED and NED for one molecule. ViennaRNA computes both directly.
+
+    SED (specified ensemble defect, against the fully-unpaired reference) is
+    the average number of nucleotides per base that are NOT single-stranded, so
+    it reads as "how far from open is this molecule". Lower = more accessible.
+    For a trigger that has to invade a hairpin, low SED is good.
+
+    NED (native ensemble defect, against the molecule's own MFE structure) says
+    how representative that MFE structure is of the whole ensemble. Lower = the
+    MFE is a fair picture. This is the quantitative version of the warning that
+    keeps recurring in this project: candidate 4's MFE carries only 2.2% of the
+    ensemble, so single-structure claims about it are weak.
+
+    Both are normalised to 0..1 by ViennaRNA, so they compare across lengths.
+    """
+    fc = RNA.fold_compound(sequence)
+    mfe_structure, mfe_energy = fc.mfe()
+    fc.exp_params_rescale(mfe_energy)
+    fc.pf()
+    return {
+        "SED": fc.ensemble_defect("." * len(sequence)),
+        "NED": fc.ensemble_defect(mfe_structure),
+    }
+
+
+def codon_metrics(gene_dna, region_start, region_end):
+    """
+    VISTA's codon-usage panel for a trigger's binding region.
+
+    Three numbers, following compute_codon_fractions in the VISTA notebook:
+      region_mean   average E. coli usage fraction across the region
+      first_two     average over the first two codons, which matter
+                    disproportionately for translation initiation
+      whole_gene    the same average over the entire transcript, for context
+
+    Usage is the share of an amino acid's codons that are this one in E. coli,
+    so 0.5 is unremarkable and 0.05 means the organism almost never uses it.
+
+    Context for reading these: the codon-max mCherry that FAILED at the bench
+    scores 0.471, better than the working original's 0.384. Poor codon usage is
+    therefore unlikely to explain that failure, and a low number here is a flag
+    to investigate rather than a verdict.
+    """
+    return {
+        "codon_region_mean": codon_usage.mean_fraction(
+            gene_dna, region_start, region_end),
+        "codon_first_two": codon_usage.first_two_codons_fraction(
+            gene_dna, region_start),
+        "codon_whole_gene": codon_usage.mean_fraction(gene_dna),
+    }
+
+
+# ---------------------------------------------------------------------------
 # The whole table for one candidate
 # ---------------------------------------------------------------------------
 
@@ -337,6 +405,13 @@ def pdf_table(cand_id, reporter_rna=None, temperature_c=37.0, trigger_seq=None):
             switch, trigger, spans, temperature_c),
     }
 
+    switch_defects = ensemble_defects(switch, temperature_c)
+    trigger_defects = ensemble_defects(trigger, temperature_c)
+    row["switch_SED"] = switch_defects["SED"]
+    row["switch_NED"] = switch_defects["NED"]
+    row["trigger_SED"] = trigger_defects["SED"]
+    row["trigger_NED"] = trigger_defects["NED"]
+
     if reporter_rna:
         ot = offtarget(trigger, reporter_rna)
         row["offtarget_dG"] = ot
@@ -346,3 +421,12 @@ def pdf_table(cand_id, reporter_rna=None, temperature_c=37.0, trigger_seq=None):
         row["offtarget_pct_of_intended"] = None
 
     return row
+
+
+# Pressing Run on this file alone prints the metric table for every candidate.
+if __name__ == "__main__":
+    for _cid in sorted(cd.CANDIDATES):
+        _row = pdf_table(_cid)
+        print("cand %d  dG_switch %7.2f  AUG on %5.1f%%  SED %.3f  NED %.3f"
+              % (_cid, _row["dG_switch"], _row["aug_on"],
+                 _row["switch_SED"], _row["switch_NED"]))
