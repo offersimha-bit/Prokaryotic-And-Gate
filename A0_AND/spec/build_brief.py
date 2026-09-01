@@ -139,12 +139,15 @@ table(doc, ["", "rule", "why"],
         "Main_pre is a literal stretch of gene A translated as an N-terminal extension of "
         "GFP. At len_main_pre = 9 this costs 7–10 % of candidate windows on our real "
         "transcripts."],
-       ["R6", "**MainZ and SecondaryZ never bind their partner more tightly than the real "
-              "trigger does.** A margin ddG_pref weakens them further; it is swept, and "
-              "**ddG_pref = 0 (isoenergetic) is one of the levels**, not excluded.",
-        "Each Z is a copy of the trigger's own domain. A perfect Watson–Crick copy would "
-        "bind harder than the real trigger, which carries wobbles — the trigger would be "
-        "climbing uphill to displace the clamp meant to release it."],
+       ["R6", "**MainZ and SecondaryZ must never bind their partner more tightly than the "
+              "real trigger does.** Two settings satisfy that and **both are allowed**: "
+              "**ddG_pref = 0**, where Z is an exact copy of the trigger's own domain and "
+              "the exchange is isoenergetic; and **ddG_pref > 0**, where Z is weakened "
+              "further by a wobble, a mismatch or a 1-nt bulge so the trigger is actively "
+              "preferred. ddG_pref is swept over both.",
+        "The only case excluded is a **perfectly Watson–Crick** Z. The real trigger carries "
+        "G·U wobbles, so a flawless copy binds harder than the trigger itself and the "
+        "trigger would be climbing uphill to displace the clamp meant to release it."],
        ["R7", "**A 3-nt opposing_bulge faces the AUG across the main stem**, forming a "
               "3 × 3 internal loop.",
         "In ON, trigger A pairs straight through it: 18 contiguous base pairs where the "
@@ -160,16 +163,26 @@ table(doc, ["", "rule", "why"],
         "it sits in the 5'UTR and bacterial initiation needs a Shine–Dalgarno sequence — so "
         "no constraint is placed on start codons in this loop. Kim's 15-nt inhibitory loop "
         "satisfies the SD condition and is our starting sequence."],
-       ["R10", "**Overlap: |x| = 4 to 14, every value designed and scored** — not only "
-               "the longest available. **Mismatches are allowed at every length, in any "
-               "number and any placement.** No design is rejected on a mismatch ratio or a "
-               "run-length cap; instead the trigger-trigger duplex energy is computed from "
-               "the real sequences for every design and used to rank (§3.4).",
-        "|x| ≥ 4 because the overlap is the mechanism; |x| ≤ 14 so that k2 = 18 − |x| "
-        "stays at least 4 bp. We deliberately impose nothing else here: neither a 1:4 "
-        "mismatch ratio nor a run cap actually bounds sequestration (a 1:4 ratio with "
-        "uncontrolled placement is already 74 % sequestered at |x| = 14), and a hard filter "
-        "would throw away workable designs — Kim's own working trigger pair sits at 73 %."],
+       ["R10", "**Overlap: |x| = 4 to 14, every value designed and scored** — not only the "
+               "longest available. Mismatches inside the overlap are allowed as follows:\n"
+               "|x| = 4–5 → none;  |x| = 6–10 → up to 2;  |x| = 11–14 → up to 3.\n"
+               "Never at either end of the overlap, and never more than 2 consecutive.",
+        "|x| ≥ 4 because the overlap is the mechanism; |x| ≤ 14 so that k2 = 18 − |x| stays "
+        "at least 4 bp. **The rule exists to widen the search, and it does so decisively**: "
+        "between our two real transcripts there is no perfectly complementary site at any "
+        "|x| ≥ 9, while the rule finds 359 of them at |x| = 9, and 1,009 at |x| = 8 against "
+        "3. An end mismatch would be free — the duplex simply frays there — while 3 in a row "
+        "would stall trigger B's invasion. That is what the two placement conditions "
+        "prevent."],
+       ["R10b", "**R10 is a search-space rule, not a sequestration guarantee.** "
+                "Trigger–trigger sequestration is measured per design and used to rank; "
+                "nothing is rejected on it (§3.4).",
+        "The rule still permits a long uninterrupted complementary run when the mismatches "
+        "happen to cluster to one side: median sequestration stays under 2 % out to "
+        "|x| = 12 but reaches 45 % by |x| = 14. Note we do not choose where the mismatches "
+        "fall — both triggers are windows of natural transcripts, so the pattern is whatever "
+        "the two genes differ by. A hard filter would be the wrong instrument in any case: "
+        "Kim's own working trigger pair sits at 73 %."],
        ["R11", "**Trigger lengths follow: A = 18 + len_x, B = 18 + len_r2.**",
         "A is 30 nt at |x| = 12, the length both reference designs used. B is 50 nt at "
         "len_r2 = 32."],
@@ -193,23 +206,22 @@ para(doc, "The reported quantity is the probability that a defined window is **e
           "unpaired at once**, not the average over its bases:", size=9.5)
 mono(doc, "P_open(W)   =  Z( all of W unpaired ) / Z          "
           "dG_open(W)  =  - RT · ln P_open(W)", size=8.5)
-para(doc, "A ribosome does not sample bases independently — it needs its whole footprint "
-          "free at the same moment. For a window whose bases are each 90 % unpaired, the "
-          "averaged metric always reads 0.90 while the joint probability lies anywhere "
-          "between 0.90 and far less. ViennaRNA computes the joint form directly: one "
-          "hard-constrained partition function per window.", size=9.5)
-para(doc, "Windows are nested and all anchored on the start codon: the AUG alone; the RBS "
-          "through the AUG; AUG through AUG + 3n for n = 1…10 codons; and the 30-nt ribosome "
-          "footprint. The series shows how far the opening extends — which separates a "
-          "switch that merely exposes the AUG from one that clears the ribosome's path.",
-     size=9.5)
+para(doc, "A ribosome needs its whole footprint free at the same moment, not base by "
+          "base. Where every base of a window is 90 % unpaired the averaged metric always "
+          "reads 0.90, while the joint probability lies anywhere between that and far less. "
+          "ViennaRNA gives the joint form directly: one hard-constrained partition function "
+          "per window.", size=9.5)
+para(doc, "Windows are nested on the start codon: the AUG alone; the RBS through the AUG; "
+          "AUG through AUG + 3n for n = 1…10 codons; and the 30-nt ribosome footprint. The "
+          "series shows how far the opening extends — which separates a switch that merely "
+          "exposes the AUG from one that clears the ribosome's path.", size=9.5)
 
 h2(doc, "3.3  Discrimination")
 mono(doc, "ddG_AND  =  [ dG_open(11) - dG_open(01) ]  -  [ dG_open(10) - dG_open(00) ]",
      size=8.5)
-para(doc, "How much more trigger A opens the switch when trigger B is present than when it "
-          "is absent. Length cancels in the difference, so this needs no normalisation. "
-          "Separation is reported threshold-free: state 11 against the worst of 00, 01, 10.",
+para(doc, "How much more trigger A opens the switch when trigger B is present than when "
+          "it is absent. Length cancels in the difference, so no normalisation is needed. "
+          "Separation is threshold-free: state 11 against the worst of 00, 01, 10.",
      size=9.5)
 
 h2(doc, "3.4  Trigger–trigger sequestration")
@@ -218,51 +230,51 @@ para(doc, "Reported at a stated concentration (10 nM per transcript) as the dupl
           "a **ranking input, not a veto**: Kim's own published trigger pair, in the "
           "construct they describe as a working two-input AND gate, sits at 73 % "
           "sequestration by this calculation.", size=9.5)
-para(doc, "**The same check runs against the two fixed loops**, which are permanently "
-          "single-stranded and so are the one part of the switch always free to pair with a "
-          "trigger. Against every 30-nt window of our real transcripts the secondary loop "
-          "stays above −9.2 kcal/mol; the RBS loop reaches −13.8, with 36 of 730 GFP "
-          "windows below −10. Both are far from the −30 to −45 of a productive trigger "
-          "duplex, so this is reported per design, not filtered on (D12).", size=9.5)
-
-h2(doc, "3.5  Which structure the ranking reads")
-para(doc, "P(MFE) collapses with length. On our own switches it is 0.02–0.08 for the switch "
-          "alone and about 3 × 10⁻¹⁵ for the full construct with GFP — and at that length the "
-          "MFE and the centroid **disagree about whether the start codon is paired in 2 of "
-          "5 constructs**. The ranking therefore reads the centroid and the pairing "
-          "probability matrix; the MFE is reported but trusted only over the isolated "
-          "hairpin region. Disagreements are flagged, not silently ranked. (Decision D11.)",
+para(doc, "**The same check runs against the two fixed loops**, permanently "
+          "single-stranded and so the one part of the switch always free to pair with a "
+          "trigger. Over every 30-nt window of our real transcripts the secondary loop stays "
+          "above −9.2 kcal/mol and the RBS loop reaches −13.8 — both far from the −30 to "
+          "−45 of a productive trigger duplex, so this is reported, not filtered on (D12).",
      size=9.5)
 
+h2(doc, "3.5  Which structure the ranking reads")
+para(doc, "P(MFE) collapses with length: 0.02–0.08 for our switches alone, about "
+          "3 × 10⁻¹⁵ for the full construct with GFP — where the MFE and the centroid "
+          "**disagree about whether the start codon is paired in 2 of 5 constructs**. The "
+          "ranking therefore reads the centroid and the pairing-probability matrix; the MFE "
+          "is reported but trusted only over the isolated hairpin region, and disagreements "
+          "are flagged rather than silently ranked. (Decision D10.)", size=9.5)
+
 h2(doc, "3.6  Assertions that halt the run")
-para(doc, "Each of these stops the run rather than appearing as a line in a report. "
-          "**(1)** every declared helix pairs antiparallel with zero mismatches, wobbles only "
-          "where declared — this is what catches domain-order errors; "
-          "**(2)** the intended OFF dot-bracket, written from the element spans of §1.1 and "
-          "independent of any folding, is diffed against both the MFE and the centroid; "
-          "**(3)** (len_main_pre + len_LINKER) mod 3 = 0, and no in-frame stop from the AUG "
-          "through the end of the GFP CDS; "
-          "**(4)** the RBS appears exactly once, flush at the loop's 3' end, and the "
-          "SD→AUG spacing equals len_k1 and is reported; "
-          "**(5)** no AUG between the RBS loop and the intended start codon that could "
-          "initiate out of frame; "
-          "**(6)** MainZ never binds k1* more tightly than trigger A's k1 does, and "
-          "SecondaryZ likewise against k2; "
-          "**(7)** 4 ≤ len_x ≤ 14; len_x + len_k2 = 18; len_main_pre + 3 + len_k1 = 18; "
-          "**(8)** trigger A's x and trigger B's Secondary_pre are reverse complements over "
-          "the matched positions; "
-          "**(9)** the cap sits at the 5' end of the finished construct, not stranded "
-          "internally; "
-          "**(10)** any design carried between stages is matched on its full identity — "
-          "len_x, len_main_pre, len_k1, len_k2, ddG_pref, mismatch pattern — never a "
-          "partial key.", size=9)
+para(doc, "Each of these stops the run rather than appearing as a line in a report.", size=9)
+table(doc, ["", "assertion"],
+      [["1", "Every declared helix pairs antiparallel with zero mismatches, wobbles only "
+              "where declared. This is what catches domain-order errors."],
+       ["2", "The intended OFF dot-bracket, written from the element spans of §1.1 and "
+              "independent of any folding, is diffed against both the MFE and the centroid."],
+       ["3", "(len_main_pre + len_LINKER) mod 3 = 0, and no in-frame stop from the AUG "
+              "through the end of the GFP CDS."],
+       ["4", "The RBS appears exactly once, flush at the loop's 3' end, and the SD→AUG "
+              "spacing equals len_k1 and is reported."],
+       ["5", "No AUG between the RBS loop and the intended start codon that could initiate "
+              "out of frame."],
+       ["6", "MainZ never binds k1* more tightly than trigger A's k1 does. Same for "
+              "SecondaryZ against k2."],
+       ["7", "4 ≤ len_x ≤ 14; len_x + len_k2 = 18; len_main_pre + 3 + len_k1 = 18; and the "
+              "overlap satisfies the mismatch rule of R10."],
+       ["8", "Trigger A's x and trigger B's Secondary_pre are reverse complements over the "
+              "matched positions."],
+       ["9", "The cap sits at the 5' end of the finished construct, not stranded internally."],
+       ["10", "Any design carried between stages is matched on its full identity — len_x, "
+               "len_main_pre, len_k1, len_k2, ddG_pref, mismatch pattern — never a partial "
+               "key."]],
+      [0.8, 16.2], size=7.8, tail=False, pad=0)
 
 # ================================================================== 4
 h1(doc, "4.  Decisions we need", new_page=True)
 para(doc, "Six carry a recommendation we are ready to act on unless you disagree. The six "
-          "shaded rows are genuine choices where we do not think the evidence settles it. "
-          "**D1 is the one that changed most recently** — it was previously written as 18 "
-          "base pairs, which the published sequences do not support.", size=9.5)
+          "shaded rows are genuine choices where we do not think the evidence settles it.",
+     size=9.5)
 table(doc, ["#", "decision", "our position"],
       [["D1", "What does \"18\" count?", "**18 nt of arm span, bulge included** — so the main "
                                        "hairpin is 9 + 3 + 6 and only **15 bp are paired**. "
@@ -283,12 +295,14 @@ table(doc, ["#", "decision", "our position"],
                                        "it; our own switch generator deletes it. Measured: "
                                        "no thermodynamic difference and no second start site "
                                        "either way. A preference, not a result."],
-       ["D5", "Overlap range and mismatch rule", "**|x| = 4–14; mismatches unrestricted; "
-                                                 "rank on the measured trigger-trigger "
-                                                 "duplex, reject nothing.** Neither a 1:4 "
-                                                 "ratio nor a run cap actually bounds "
-                                                 "sequestration, and a hard filter would "
-                                                 "discard workable designs."],
+       ["D5", "Overlap range and mismatch rule", "**|x| = 4–14. Mismatches: none up to "
+                                                 "|x| = 5, up to 2 for 6–10, up to 3 for "
+                                                 "11–14; never at an end, never more than 2 "
+                                                 "in a row.** Decisive for the search — for "
+                                                 "our gene pair there is no perfectly "
+                                                 "complementary site at all beyond |x| = 8. "
+                                                 "Sequestration is then ranked, not "
+                                                 "filtered."],
        ["D6", "Size and composition of the lab panel", "**Open.** 12 constructs proposed: "
                                                        "8 gate designs (4 levels of |x| × 2 "
                                                        "of ddG_pref), 1 benchmark at a = 4, "

@@ -193,8 +193,8 @@ h1(doc, "4.  Lengths")
 
 h2(doc, "4.1  Decision: both hairpin arms span 18 nt")
 para(doc, "**Both hairpin arms are fixed at 18 nucleotides, counting the bulge** — not 18 "
-          "base pairs. The distinction matters and an earlier draft got it wrong, so the "
-          "measurement is worth stating plainly.")
+          "base pairs. The distinction decides how deep the hairpin is, so the measurement "
+          "is worth stating plainly.")
 para(doc, "The two published main hairpins are built differently: Green's is 9 bp + a 3-nt "
           "bulge + 6 bp, Kim's is 11 bp + a 1-nt bulge + 6 bp. Their base-pair counts differ "
           "(15 against 17) but **both arms span exactly 18 nucleotides**. So 18 is not a "
@@ -236,9 +236,10 @@ para(doc, "**len_k1 is not free either.** §6.6 shows that k1 is exactly the dis
           "every length in the construct except len_x and len_r2 is closed.")
 
 h2(doc, "4.3  Trigger B — the split is now determined")
-para(doc, "An earlier draft flagged \"the split of trigger B's ~50 nt\" as undefined. "
-          "**The 18 bp decision closes it**, and the reason it was ever open is worth stating "
-          "so the same gap is not re-introduced.")
+para(doc, "Trigger B's ~50 nt could in principle be split many ways between k2, "
+          "Secondary_pre and r2, with very different behaviour. **The arm span of §4.1 "
+          "closes it**, and the reasoning is worth stating so the gap is not "
+          "re-introduced.")
 para(doc, "Trigger B is k2 + Secondary_pre + r2. Two of those three are already pinned: "
           "Secondary_pre = x* has length len_x, and k2 has length 18 − len_x. Their sum is "
           "18 whatever len_x turns out to be. So:")
@@ -262,10 +263,11 @@ bullet(doc, "It is the region over which the two triggers are **complementary to
             "— so longer is worse, because they bind each other instead of the switch.")
 figure(doc, "fig3_overlap.png",
        "**Figure 3.** Fraction of trigger A tied up in a trigger-A : trigger-B duplex, "
-       "against overlap length. Red: perfect complementarity. Green: with mismatches at a "
-       "1:4 ratio, spread evenly. The green curve does not stay flat — it climbs again past "
-       "|x| = 14 and is jagged, because a fixed ratio does not hold the longest complementary "
-       "run down as the overlap grows. The run, not the ratio, is what the rule constrains.")
+       "against overlap length. Red: perfect complementarity — unusable beyond |x| = 8. "
+       "Green: the same overlaps carrying evenly spread mismatches, which is what moves the "
+       "curve back down. The green curve is jagged and turns up again past |x| = 14 because "
+       "a fixed proportion of mismatches does not hold the longest complementary run down "
+       "as the overlap grows; §5.1.1 states the rule actually used.")
 para(doc, "With perfect complementarity the useful range ends abruptly: sequestration goes "
           "from 0.6 % at |x| = 7 to 19 % at 8 and 70 % at 9. **Introducing mismatches moves "
           "the whole curve**, and beyond |x| ≈ 8 they are the only thing that keeps the "
@@ -279,71 +281,76 @@ table(doc, ["longest complementary run inside a 12-nt overlap",
       [["trigger A sequestered (10 nM, 37 °C)",
         "0.0 %", "0.1 %", "1.1 %", "4.0 %", "19 %", "61 %", "90 %"]],
       [5.6, 1.63, 1.63, 1.63, 1.63, 1.63, 1.63, 1.62], size=8.5, zebra=False)
-callout(doc, "A run cap on its own is not a bound — this corrects an earlier draft",
+callout(doc, "Why run length is a diagnostic and not a threshold",
         "A single 7-nt complementary run gives 0.6 % sequestration. But a 15-nt overlap with "
         "**one** mismatch in the middle also has a longest run of 7 — two of them — and "
         "measures **100 %**, because the two short helices stitch together across the "
-        "mismatch at almost no cost. The cap has to be low enough that stitching does not "
-        "pay. With mismatches placed to keep the runs even, **a longest run of ≤ 4 nt held "
-        "sequestration below 1 % at every overlap length from 4 to 20**, while a run of 5 "
-        "already reaches 56 % at |x| = 11. Individual placements scatter around that, which "
-        "is why the run cap screens and the measured duplex energy decides. A 1:4 mismatch ratio is a reasonable rule of thumb up to |x| ≈ 14 and "
-        "then fails: at |x| = 15 three mismatches leave 31 % sequestered, and at |x| = 18 "
-        "four leave 69 %.")
-h2(doc, "5.1.1  The rule adopted — and why it is deliberately not a filter")
-para(doc, "It is tempting to turn the numbers above into a constraint. We have tried two "
-          "and neither survives contact with the measurement, so **the specification imposes "
-          "no mismatch rule at all**:")
-table(doc, ["candidate rule", "why it fails"],
-      [["longest complementary run ≤ 7 nt",
-        "A single 7-nt run gives 0.6 %. Two of them — a 15-nt overlap with one mismatch in "
-        "the middle — also have a longest run of 7 and give **100 %**."],
-       ["mismatches at a ratio of 1:4",
-        "Only holds if the placement is also controlled. With ⌊len_x/4⌋ mismatches placed "
-        "at random, the median sequestration is already **74 % at |x| = 14** and the 90th "
-        "percentile passes 95 % from |x| = 11."],
-       ["longest complementary run ≤ 4 nt",
-        "This one does hold — but it is far stricter than the mechanism requires, and it "
-        "would discard designs that work. Kim's own published trigger pair, in the construct "
-        "they call a working AND gate, sits at **73 % sequestration**."]],
-      [5.0, 12.0], size=8.5)
-para(doc, "**So the rule is only this: |x| between 4 and 14, mismatches unrestricted in "
-          "number and placement.** The lower bound is the mechanism — there has to be an "
-          "overlap. The upper bound keeps len_k2 = 18 − len_x at 4 bp or more. Everything "
-          "else is measured rather than constrained: the trigger-trigger duplex energy is "
-          "computed from the two real sequences for every design and used to **rank**, and "
-          "the longest run is reported alongside it as the diagnostic that usually explains "
-          "the ranking (it correlates at r = −0.79; the number of matched positions at "
-          "r = −0.85).")
-callout(doc, "Why no filter here",
-        "A hard cut would be easy to write and would look rigorous. But sequestration is a "
-        "continuous cost that trades against nucleation, the published counter-example sits "
-        "far on the wrong side of any cut we could justify, and the gene-pair search is "
-        "already sparse (Table 3). Ranking keeps the marginal designs visible; filtering "
-        "would silently delete them.")
-callout(doc, "A reassuring measurement",
-        "Kim's own published triggers are not exempt from this. TrG5 and TrG3n11 — the pair "
-        "in the construct they describe as a genuine two-input AND gate — bind each other at "
-        "−12.8 kcal/mol, which is **73 % sequestration** by the same calculation. The gate "
-        "still worked. Sequestration should therefore be treated as a **ranking signal, not "
-        "a veto**; the numbers above set priorities, they do not disqualify designs.")
+        "mismatch at almost no cost. Run length tracks sequestration well within a fixed "
+        "overlap length (r = −0.79, and the count of matched positions r = −0.85) but does "
+        "not bound it across lengths. It is reported next to every design to explain the "
+        "ranking; the number that decides is the measured duplex energy itself.")
+h2(doc, "5.1.1  The mismatch rule")
+para(doc, "Mismatches inside the overlap are what make the search viable, so they are "
+          "allowed — but not without shape. The rule is:")
+table(doc, ["|x|", "mismatches allowed", "everywhere subject to"],
+      [["4 – 5", "**none**", "—"],
+       ["6 – 10", "**up to 2**", "never at either end of the overlap;\n"
+                                  "never more than 2 consecutive"],
+       ["11 – 14", "**up to 3**", "the same two conditions"]],
+      [2.6, 4.4, 10.0], size=9)
+para(doc, "**Why the two placement conditions.** A mismatch at either end costs nothing "
+          "to the trigger-trigger duplex — the folding routine simply trims the frayed end "
+          "— so it would be a mismatch that buys no decoupling while still weakening trigger "
+          "B's grip and fraying the junction where the secondary hairpin meets its free "
+          "toehold. Three or more consecutive mismatches open an internal loop large enough "
+          "to stall trigger B's branch migration through Secondary_pre. Both conditions "
+          "therefore keep the mismatches useful rather than merely tolerated.")
+para(doc, "**What the rule buys.** Counting every (window of gene A, window of gene B) pair "
+          "between our two real transcripts, with and without it:")
+table(doc, ["|x|", "perfectly complementary sites", "sites under the rule", "widening"],
+      [["4 – 5", "1,716 and 431", "unchanged — no mismatches allowed", "—"],
+       ["6", "95", "7,062", "74×"],
+       ["7", "24", "2,737", "114×"],
+       ["8", "3", "1,009", "336×"],
+       ["9 – 14", "**0 at every length**", "359, 113, 244, 87, 26, 8",
+        "from nothing to something"]],
+      [2.2, 5.4, 5.4, 4.0], size=9,
+      row_fills=[None, None, None, None, "EAF3EC"])
+para(doc, "The last row is the important one: **for this gene pair there is not a single "
+          "perfectly complementary site at any overlap of 9 nt or more.** Without mismatches "
+          "the entire long-overlap half of the design range is empty, and the sweep over "
+          "|x| that §5.3 proposes could not be run at all.")
+callout(doc, "What the rule does not do",
+        "It does not bound sequestration, and it is not meant to. Enumerating every "
+        "placement it permits: the median design stays under 2 % out to |x| = 12, but the "
+        "worst permitted placement reaches 93 % at |x| = 10 and the median is 45 % by "
+        "|x| = 14 — because clustering the allowed mismatches to one side still leaves one "
+        "long clean run. Sequestration is therefore measured and **ranked** (§7.4), not "
+        "filtered. Kim's own working trigger pair sits at 73 %, so a filter would be the "
+        "wrong instrument in any case.")
+para(doc, "**One thing worth keeping in mind: we do not choose where the mismatches fall.** "
+          "Both triggers are windows of natural transcripts, so the mismatch pattern is "
+          "whatever the two genes happen to differ by. The rule decides which "
+          "(window, window) pairs count as a usable overlap; it does not design anything. "
+          "That is also why the spread in the callout above is a statement about which gene "
+          "pairs will rank badly, not about a choice we could get wrong.")
 
 h2(doc, "5.2  The search over gene pairs")
 para(doc, "Trigger A and trigger B are windows of two chosen input RNAs. Not every pair of "
           "genes admits a design: the two windows must be complementary over at least 4 nt, "
           "because that overlap is the mechanism. The search is therefore:")
 bullet(doc, "For every window of gene A and every window of gene B, find all overlaps of "
-            "length **|x| = 4 up to the maximum available**, allowing mismatches at **every** "
-            "length, subject to the run cap of §5.1.")
+            "length **|x| = 4 to 14**, admitting mismatches under the rule of §5.1.1.")
 bullet(doc, "**Every value of |x| from 4 upwards is designed and scored — not only the "
             "longest available overlap.** The longest overlap is often the worst choice, "
             "because it is also the most sequestered.")
 bullet(doc, "Each surviving overlap determines the whole construct through §4.2.")
-para(doc, "**Mismatches are permitted below |x| = 8, not only above it.** They buy nothing "
-          "thermodynamically there — a 6-nt perfect overlap is already at 0 % sequestration — "
-          "and each one costs trigger B about 4.5 kcal/mol of grip on the switch. The reason "
-          "to allow them anyway is that they are what makes the search find anything at all. "
-          "Counting every (window of A, window of B) pair between our two real transcripts:")
+para(doc, "**Mismatches earn their place from |x| = 6 upwards, not only at long overlaps.** "
+          "They buy nothing thermodynamically at that length — a 6-nt perfect overlap is "
+          "already at 0 % sequestration — and each one costs trigger B about 4.5 kcal/mol of "
+          "grip on the switch. They are allowed because they are what makes the search find "
+          "anything at all. Counting every (window of A, window of B) pair between our two "
+          "real transcripts, with no rule applied:")
 table(doc, ["overlap |x|", "perfect", "≤ 1 mismatch", "≤ 2 mismatches", "≤ 3 mismatches"],
       [["6 nt", "95", "2,014", "16,324", "77,853"],
        ["7 nt", "24", "539", "5,552", "30,884"],
@@ -417,17 +424,10 @@ para(doc, "**Rule: reject any trigger-A window whose Main_pre introduces an in-f
           "applied the same filter when tiling their library, and Kim wrote it into their "
           "NUPACK script as a pattern constraint — then had to disable it, because the "
           "designer has no knowledge of the reading frame. It has to live in our own code.")
-para(doc, "It gets harder to satisfy as len_main_pre grows, but not by much. Measured on the "
-          "real transcripts, the fraction of candidate windows lost is:")
-table(doc, ["gene", "len_main_pre = 9", "len_main_pre = 12", "len_main_pre = 15"],
-      [["GFP (759 nt)", "10.1 %", "13.0 %", "15.2 %"],
-       ["mCherry (711 nt)", "6.5 %", "8.3 %", "10.0 %"],
-       ["random-sequence expectation", "13.4 %", "17.5 %", "21.3 %"]],
-      [5.0, 4.0, 4.0, 4.0], size=9)
-para(doc, "At the adopted len_main_pre = 9 the filter costs 7–10 % of candidate windows on "
-          "our real transcripts. The row for 12 is kept because it is what an 18-base-pair "
-          "reading of the stem would have required (§4.1).",
-     size=8.5, italic=True, color=GREY)
+para(doc, "The cost is modest. At len_main_pre = 9, measured directly on the real "
+          "transcripts, the filter removes **10.1 % of candidate windows in GFP and 6.5 % in "
+          "mCherry** — both below the 13.4 % a random sequence of that length would give, "
+          "because coding sequence is depleted of stop codons in every frame.")
 
 h2(doc, "6.3  MainZ and SecondaryZ must lose to the trigger")
 para(doc, "MainZ holds k1* shut in the OFF state, and trigger A has to displace it. "
@@ -438,10 +438,17 @@ para(doc, "A **perfectly Watson–Crick** copy binds its partner slightly harder
           "G·U wobble. The trigger would then be climbing uphill to displace the very clamp "
           "meant to release it. Copying the trigger's own sequence exactly makes the exchange "
           "isoenergetic — neither favoured nor disfavoured.")
-para(doc, "**Rule: go further than isoenergetic.** MainZ and SecondaryZ are built to bind "
-          "**strictly weaker** than the trigger does, by a configurable margin ddG_pref, so "
-          "that the trigger is actively preferred. The margin is achieved with a G·U wobble, "
-          "a single mismatch, or a 1-nt bulge in the Z strand.")
+para(doc, "**The rule is one-sided.** MainZ and SecondaryZ must never bind their partner "
+          "*more tightly* than the real trigger does. Two settings satisfy that and both are "
+          "on the table:")
+bullet(doc, "**ddG_pref = 0** — Z is an exact copy of the trigger's own domain, wobbles "
+            "included, so the exchange is isoenergetic and neither side is favoured. This is "
+            "the simplest construction and is a legitimate choice, not a fallback.")
+bullet(doc, "**ddG_pref > 0** — Z is weakened further by a G·U wobble, a single mismatch or "
+            "a 1-nt bulge, so the trigger is actively preferred.")
+para(doc, "What is excluded is only the third case: a **perfectly Watson–Crick** Z, which "
+          "would bind harder than the real trigger and make the exchange uphill. ddG_pref is "
+          "swept over both allowed settings (§5.3) rather than fixed.")
 callout(doc, "Trade-off to measure, not assume",
         "Every weakening of Z also weakens the OFF-state lock by the same amount. ddG_pref "
         "is therefore swept rather than fixed (§5.3), and the OFF-state leak must be reported "
@@ -460,16 +467,16 @@ table(doc, ["main hairpin geometry", "hairpin ΔG", "trigger A : 5' arm ΔG",
       [["15 bp, no bulge (control)", "−23.23", "−25.15", "−1.92 kcal/mol"],
        ["9 + 3-nt bulge + 6  (Green, and A0)", "−21.94", "−31.55", "−9.61 kcal/mol"],
        ["11 + 1-nt bulge + 6  (Kim)", "−24.99", "−31.44", "−6.45 kcal/mol"],
-       ["12 + 3-nt bulge + 6  (an 18-bp reading)", "−28.46", "−38.03", "−9.57 kcal/mol"]],
+       ["12 + 3-nt bulge + 6  (a deeper arm, for scale)", "−28.46", "−38.03",
+        "−9.57 kcal/mol"]],
       [5.6, 3.2, 4.4, 3.8], size=9,
       row_fills=[None, DEC_FILL, None, None])
 para(doc, "Three things follow. Without a bulge the gate has a 1.9 kcal/mol margin — too "
           "thin to rely on. A 3-nt bulge is worth about 3 kcal/mol more than Kim's 1-nt "
-          "bulge, which is why we keep Green's arrangement. And the adopted 9 + 3 + 6 gives "
-          "essentially the same drive as the deeper 12 + 3 + 6 (−9.61 against −9.57), so "
-          "nothing is lost by reading 18 as an arm span — though the shallower hairpin is "
-          "also a **weaker OFF lock** (−21.94 against −28.46), which the four-state table "
-          "will show directly.", space_after=10)
+          "bulge, which is why we keep Green's arrangement. And the drive is insensitive to "
+          "how deep the arm is (−9.61 at 9 + 3 + 6 against −9.57 at 12 + 3 + 6) — but the "
+          "**OFF lock is not** (−21.94 against −28.46). A shallower arm is the looser lock, "
+          "and the four-state table will show that directly.", space_after=10)
 
 h2(doc, "6.5  GFP's own start codon")
 para(doc, "The GFP CDS begins with its own ATG. Translation initiates upstream at the "
@@ -586,8 +593,7 @@ para(doc, "**One constraint, not two.** The loop must carry no Shine–Dalgarno-
           "because that would create a second ribosome entry point. It does **not** need to "
           "be free of AUG codons: the secondary loop sits in the 5'UTR, bacterial initiation "
           "requires an SD at the right spacing, and an AUG with no SD upstream of it "
-          "initiates nothing. An earlier draft carried a no-start-codon condition here; it "
-          "was unnecessary and has been removed.")
+          "initiates nothing, so no constraint is placed on start codons in this loop.")
 para(doc, "**Recommendation.** Start from Kim's fixed 15-nt loop, which we verified carries "
           "no SD-like motif, and check the intended fold for each design. "
           "Where it fails that check, design the loop de novo in NUPACK exactly as Kim did — "
@@ -711,10 +717,13 @@ table(doc, ["#", "assertion"],
        ["7", "The RBS appears exactly once; no second SD-like motif in the added 5' region."],
        ["8", "MainZ binds k1* strictly weaker than trigger A's k1 does, by at least "
               "ddG_pref. Same for SecondaryZ against k2."],
-       ["9", "4 ≤ len_x ≤ 14. The measured duplex free energy and bound fraction between "
-              "the two real trigger sequences are recorded for every design, together with "
-              "the longest complementary run. **No design is rejected on any of the three** "
-              "(§5.1.1)."],
+       ["9", "4 ≤ len_x ≤ 14, and the overlap satisfies §5.1.1: no mismatches at "
+              "|x| ≤ 5, at most 2 for |x| = 6–10, at most 3 for |x| = 11–14, never at either "
+              "end and never more than 2 consecutive."],
+       ["9b", "The measured duplex free energy and bound fraction between the two real "
+               "trigger sequences are recorded for every design, together with the longest "
+               "complementary run. **No design is rejected on any of the three** — they "
+               "rank (§7.4)."],
        ["10", "len_x + len_k2 = 18, and len_main_pre + 3 + len_k1 = 18 — an arm span, "
                "with the bulge counted (§4.1)."],
        ["11", "Trigger A's x and trigger B's Secondary_pre are reverse complements over the "
@@ -763,11 +772,12 @@ table(doc,
         "thermodynamic difference, and no second start site either way (§6.5). A preference "
         "rather than a result, which is why we would rather you called it."],
        ["D5", "Overlap range and mismatch rule",
-        "**|x| = 4 to 14, mismatches unrestricted, nothing filtered**",
-        "Every |x| in range is designed and scored. We tried two candidate constraints and "
-        "dropped both: a 7-nt run cap does not bound sequestration, and a 1:4 ratio with "
-        "uncontrolled placement is already 74 % sequestered at |x| = 14. The trigger-trigger "
-        "duplex is measured and used to rank instead (§5.1.1)."],
+        "**|x| = 4–14; 0 mismatches to |x| = 5, 2 for 6–10, 3 for 11–14; never at an end, "
+        "never more than 2 in a row**",
+        "Every |x| in range is designed and scored. The rule exists to widen the search, and "
+        "it does so decisively: for our gene pair there is **no** perfectly complementary "
+        "site at any |x| ≥ 9, and the rule finds 359 at |x| = 9. It is a search-space rule, "
+        "not a sequestration guarantee — that is measured and ranked separately (§5.1.1)."],
        ["D6", "Size and composition of the lab panel", "**open** — 12 constructs proposed "
                                                        "in §5.3",
         "Determines how many levels of |x| and ddG_pref we can afford to test."],

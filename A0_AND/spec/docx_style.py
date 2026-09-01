@@ -67,19 +67,23 @@ def shade(cell, hexcolor):
 
 
 def cell_text(cell, text, bold=False, size=8.5, color=None, mono=False,
-              align=None):
-    """Writes text into a cell. Honours \\n as a line break and ** as bold."""
+              align=None, pad=2):
+    """Writes text into a cell. Honours \\n as a line break and ** as bold.
+
+    pad is the space above and below the cell text, in points. Dropping it to 0
+    is the cheapest way to shorten a tall table without shrinking the type.
+    """
     cell.text = ""
     p = cell.paragraphs[0]
-    p.paragraph_format.space_before = Pt(2)
-    p.paragraph_format.space_after = Pt(2)
+    p.paragraph_format.space_before = Pt(pad)
+    p.paragraph_format.space_after = Pt(pad)
     if align is not None:
         p.alignment = align
     for i, chunk in enumerate(str(text).split("\n")):
         if i:
             p = cell.add_paragraph()
             p.paragraph_format.space_before = Pt(0)
-            p.paragraph_format.space_after = Pt(2)
+            p.paragraph_format.space_after = Pt(pad)
             if align is not None:
                 p.alignment = align
         for seg, seg_bold in parse_bold(chunk):
@@ -100,7 +104,7 @@ def repeat_header(t):
 
 
 def table(doc, headers, rows, widths, size=8.5, mono_cols=(), zebra=True,
-          row_fills=None, tail=True):
+          row_fills=None, tail=True, pad=2):
     """widths in cm; must sum to CONTENT_CM.
 
     tail=False omits the spacer paragraph that normally follows a table. Use it
@@ -115,7 +119,8 @@ def table(doc, headers, rows, widths, size=8.5, mono_cols=(), zebra=True,
         c = t.rows[0].cells[j]
         c.width = Cm(w)
         shade(c, HDR_FILL)
-        cell_text(c, h, bold=True, size=size, color=RGBColor(0xFF, 0xFF, 0xFF))
+        cell_text(c, h, bold=True, size=size, color=RGBColor(0xFF, 0xFF, 0xFF),
+                  pad=pad)
     if any(headers):
         repeat_header(t)
     for i, row in enumerate(rows):
@@ -129,7 +134,7 @@ def table(doc, headers, rows, widths, size=8.5, mono_cols=(), zebra=True,
                 fill = ALT_FILL
             if fill:
                 shade(cells[j], fill)
-            cell_text(cells[j], v, size=size, mono=(j in mono_cols))
+            cell_text(cells[j], v, size=size, mono=(j in mono_cols), pad=pad)
     if tail:
         doc.add_paragraph().paragraph_format.space_after = Pt(4)
     return t
